@@ -1,0 +1,42 @@
+{
+  "name": "aarogyam",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:reset": "prisma migrate reset",
+    "whatsapp": "node scripts/wa-init.mjs"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "fuse.js": "^7.3.0",
+    "jose": "^6.2.3",
+    "jsonwebtoken": "^9.0.3",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "next": "^15.3.1",
+    "pg": "^8.21.0",
+    "prisma": "^5.22.0",
+    "qrcode-terminal": "^0.12.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tailwindcss-animate": "^1.0.7",
+    "whatsapp-web.js": "^1.34.7"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.17"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  }
+}

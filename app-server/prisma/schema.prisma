@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique // Used as User ID - no @ required
+  passwordHash  String
+  role          String   // "DOCTOR" | "COMPOUNDER" | "PATIENT"
+  createdAt     DateTime @default(now())
+
+  patientProfile      PatientProfile?
+  appointmentsPatient Appointment[]   @relation("PatientAppointments")
+  appointmentsDoctor  Appointment[]   @relation("DoctorAppointments")
+  medicalRecordsDoc   MedicalRecord[] @relation("DoctorRecords")
+  medicalRecordsPat   MedicalRecord[] @relation("PatientRecords")
+}
+
+model PatientProfile {
+  id               String   @id @default(cuid())
+  fullName         String
+  dateOfBirth      String
+  gender           String
+  contact          String
+  medicalHistory   String?
+  profileComplete  Boolean  @default(false)
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+}
+
+model Appointment {
+  id              String   @id @default(cuid())
+  appointmentDate String
+  timeSlot        String
+  status          String   @default("Pending")
+  createdAt       DateTime @default(now())
+  patientId       String
+  doctorId        String
+  patient         User     @relation("PatientAppointments", fields: [patientId], references: [id])
+  doctor          User     @relation("DoctorAppointments", fields: [doctorId], references: [id])
+}
+
+model MedicalRecord {
+  id               String         @id @default(cuid())
+  consultationDate String
+  symptoms         String
+  diagnosis        String
+  
+  // Vital Signs (mandatory)
+  bloodPressure    String?
+  heartRate        Int?
+  temperature      Float?
+  spo2             Int?
+  weight           Float?
+  respiratoryRate  Int?
+  
+  // System Examinations (Normal/Abnormal + notes)
+  rsExam           String?
+  cvsExam          String?
+  cnsExam          String?
+  paExam           String?
+  rsNote           String?
+  cvsNote          String?
+  cnsNote          String?
+  paNote           String?
+  
+  // General Assessment (present/absent checkboxes)
+  allergy          Boolean? @default(false)
+  allergyNote      String?
+  edema            Boolean? @default(false)
+  edemaNote        String?
+  clubbing         Boolean? @default(false)
+  icterus          Boolean? @default(false)
+  pallor           Boolean? @default(false)
+  
+  // Medical History (checkboxes)
+  historyDM        Boolean? @default(false)
+  historyHTN       Boolean? @default(false)
+  historyIHD       Boolean? @default(false)
+  historyCVA       Boolean? @default(false)
+  historyCKD       Boolean? @default(false)
+  historyHypothyroid Boolean? @default(false)
+  historyCOPD      Boolean? @default(false)
+
+  createdAt        DateTime       @default(now())
+  patientId        String
+  doctorId         String
+  patient          User           @relation("PatientRecords", fields: [patientId], references: [id])
+  doctor           User           @relation("DoctorRecords", fields: [doctorId], references: [id])
+  prescriptions    Prescription[]
+}
+
+model Prescription {
+  id             String        @id @default(cuid())
+  medicationName String
+  dosage         String
+  frequency      String
+  duration       String
+  instructions   String?
+  recordId       String
+  record         MedicalRecord @relation(fields: [recordId], references: [id])
+}
+
+model Drug {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([name])
+}
