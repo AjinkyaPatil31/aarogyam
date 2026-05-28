@@ -6,11 +6,7 @@ import { usePathname } from 'next/navigation';
 export default function SessionGuard({ children }) {
   const pathname = usePathname();
 
-  // Instant structural pass-through for public marketing landing pages
-  if (pathname === '/') {
-    return <>{children}</>;
-  }
-
+  // 1. All React hooks are defined first at the top of the function scope
   useEffect(() => {
     const originalFetch = window.fetch;
 
@@ -37,6 +33,11 @@ export default function SessionGuard({ children }) {
       window.fetch = originalFetch;
     };
   }, []);
+
+  // 2. Conditional check is executed only AFTER all hooks are safely locked down
+  if (pathname === '/') {
+    return <>{children}</>;
+  }
 
   return children;
 }
