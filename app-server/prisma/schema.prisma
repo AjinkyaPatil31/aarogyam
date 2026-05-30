@@ -4,9 +4,9 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = "postgresql://postgres:Aarogyam93132@db.ehfgftuntzfgublsdgqx.supabase.co:5432/postgres"
 }
-
+    
 model assessments {
   assessment_id    Int             @id @default(autoincrement())
   patient_id       Int?
