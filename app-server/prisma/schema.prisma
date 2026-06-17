@@ -4,85 +4,108 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = "postgresql://postgres.ehfgftuntzfgublsdgqx:Aarogyam93132@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+  url      = env("DATABASE_URL")
 }
-    
-model assessments {
-  assessment_id    Int             @id @default(autoincrement())
-  patient_id       Int?
-  doctor_id        Int?
-  visit_date       DateTime?       @default(now()) @db.Timestamp(6)
-  bp_systolic      Int?
-  bp_diastolic     Int?
-  pulse            Int?
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  role          String
+  createdAt     DateTime @default(now())
+
+  patientProfile      PatientProfile?
+  appointmentsPatient Appointment[]   @relation("PatientAppointments")
+  appointmentsDoctor  Appointment[]   @relation("DoctorAppointments")
+  medicalRecordsDoc   MedicalRecord[] @relation("DoctorRecords")
+  medicalRecordsPat   MedicalRecord[] @relation("PatientRecords")
+}
+
+model PatientProfile {
+  id               String   @id @default(cuid())
+  fullName         String
+  dateOfBirth      String
+  gender           String
+  contact          String
+  medicalHistory   String?
+  profileComplete  Boolean  @default(false)
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+}
+
+model Appointment {
+  id              String   @id @default(cuid())
+  appointmentDate String
+  timeSlot        String
+  status          String   @default("Pending")
+  createdAt       DateTime @default(now())
+  patientId       String
+  doctorId        String
+  patient         User     @relation("PatientAppointments", fields: [patientId], references: [id])
+  doctor          User     @relation("DoctorAppointments", fields: [doctorId], references: [id])
+}
+
+model MedicalRecord {
+  id               String         @id @default(cuid())
+  consultationDate String
+  symptoms         String
+  diagnosis        String
+
+  bloodPressure    String?
+  heartRate        Int?
+  temperature      Float?
   spo2             Int?
-  temperature      Decimal?        @db.Decimal(4, 1)
-  respiratory_rate Int?
-  has_dm           Boolean?        @default(false)
-  has_htn          Boolean?        @default(false)
-  has_asthma_copd  Boolean?        @default(false)
-  has_hypothyroid  Boolean?        @default(false)
-  cvs_exam         String?         @db.VarChar(255)
-  cns_exam         String?         @db.VarChar(255)
-  rs_exam          String?         @db.VarChar(255)
-  diagnosis        String?         @db.VarChar(255)
-  users            users?          @relation(fields: [doctor_id], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
-  patients         patients?       @relation(fields: [patient_id], references: [patient_id], onDelete: Cascade, onUpdate: NoAction)
-  prescriptions    prescriptions[]
+  weight           Float?
+  respiratoryRate  Int?
+
+  rsExam           String?
+  cvsExam          String?
+  cnsExam          String?
+  paExam           String?
+  rsNote           String?
+  cvsNote          String?
+  cnsNote          String?
+  paNote           String?
+
+  allergy          Boolean? @default(false)
+  allergyNote      String?
+  edema            Boolean? @default(false)
+  edemaNote        String?
+  clubbing         Boolean? @default(false)
+  icterus          Boolean? @default(false)
+  pallor           Boolean? @default(false)
+
+  historyDM        Boolean? @default(false)
+  historyHTN       Boolean? @default(false)
+  historyIHD       Boolean? @default(false)
+  historyCVA       Boolean? @default(false)
+  historyCKD       Boolean? @default(false)
+  historyHypothyroid Boolean? @default(false)
+  historyCOPD      Boolean? @default(false)
+
+  createdAt        DateTime       @default(now())
+  patientId        String
+  doctorId         String
+  patient          User           @relation("PatientRecords", fields: [patientId], references: [id])
+  doctor           User           @relation("DoctorRecords", fields: [doctorId], references: [id])
+  prescriptions    Prescription[]
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model medicines {
-  medicine_id         Int             @id @default(autoincrement())
-  brand_name          String          @db.VarChar(150)
-  generic_composition String?         @db.VarChar(255)
-  category            String?         @db.VarChar(50)
-  is_active           Boolean?        @default(true)
-  prescriptions       prescriptions[]
-
-  @@index([brand_name], map: "idx_medicine_name")
+model Prescription {
+  id             String        @id @default(cuid())
+  medicationName String
+  dosage         String
+  frequency      String
+  duration       String
+  instructions   String?
+  recordId       String
+  record         MedicalRecord @relation(fields: [recordId], references: [id])
 }
 
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model patients {
-  patient_id     Int           @id @default(autoincrement())
-  full_name      String        @db.VarChar(150)
-  age            Int
-  sex            String?       @db.VarChar(10)
-  weight         Decimal?      @db.Decimal(5, 2)
-  blood_group    String?       @db.VarChar(5)
-  contact_number String?       @db.VarChar(15)
-  registered_by  Int?
-  created_at     DateTime?     @default(now()) @db.Timestamp(6)
-  assessments    assessments[]
-  users          users?        @relation(fields: [registered_by], references: [user_id], onDelete: NoAction, onUpdate: NoAction)
+model Drug {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
 
-  @@index([contact_number], map: "idx_patient_contact")
-  @@index([full_name], map: "idx_patient_name")
-}
-
-model prescriptions {
-  prescription_id      Int          @id @default(autoincrement())
-  assessment_id        Int?
-  medicine_id          Int?
-  dosage               String?      @db.VarChar(50)
-  frequency            String?      @db.VarChar(20)
-  timing               String?      @db.VarChar(50)
-  duration_days        Int?
-  total_quantity       Int?
-  special_instructions String?
-  assessments          assessments? @relation(fields: [assessment_id], references: [assessment_id], onDelete: Cascade, onUpdate: NoAction)
-  medicines            medicines?   @relation(fields: [medicine_id], references: [medicine_id], onDelete: NoAction, onUpdate: NoAction)
-}
-
-/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
-model users {
-  user_id       Int           @id @default(autoincrement())
-  username      String        @unique @db.VarChar(50)
-  password_hash String        @db.VarChar(255)
-  role          String        @db.VarChar(20)
-  display_name  String?       @db.VarChar(100)
-  created_at    DateTime?     @default(now()) @db.Timestamp(6)
-  assessments   assessments[]
-  patients      patients[]
+  @@index([name])
 }
