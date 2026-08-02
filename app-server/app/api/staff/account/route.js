@@ -1,25 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireAuth } from '@/app/lib/authHelpers';
 import bcrypt from 'bcryptjs';
 
 export const runtime = 'nodejs';
 
-async function getPayload(req) {
-  const authHeader = req.headers.get('authorization')
-                  ?? req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) return null;
-  const token = authHeader.split(' ')[1];
-  try { return await verifyToken(token); }
-  catch { return null; }
-}
-
 export async function PUT(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const { newEmail, newPassword, currentPassword } = await req.json();
 

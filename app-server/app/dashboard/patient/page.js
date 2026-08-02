@@ -9,9 +9,9 @@ import ErrorBoundary from '@/app/components/ErrorBoundary';
    Sign Out helper — flushes token from localStorage, cookie, then redirects
    ──────────────────────────────────────────────────────────────────────────── */
 function signOut(router) {
-  localStorage.removeItem("aarogyam_token");
-  document.cookie =
-    "aarogyam_token=; path=/; max-age=0; SameSite=Lax";
+  document.cookie = "aarogyam_token=; path=/; max-age=0; SameSite=Lax";
+  sessionStorage.removeItem('aarogyam_user_email');
+  sessionStorage.removeItem('aarogyam_user_role');
   router.push("/login");
 }
 
@@ -27,8 +27,7 @@ export default function PatientDashboard() {
   const [activeTab, setActiveTab] = useState("records");
   const [needsProfile, setNeedsProfile] = useState(false);
   const [profileForm, setProfileForm] = useState({
-    fullName: '', dateOfBirth: '', gender: '', contact: '', newPassword: '',
-  });
+    fullName: '', dateOfBirth: '', gender: '', contact: '', newPassword: ''});
   const [profileError, setProfileError] = useState('');
   const [profileLoading, setProfileLoading] = useState(false);
   const [pwForm, setPwForm] = useState({
@@ -41,22 +40,18 @@ export default function PatientDashboard() {
   const [expandedRecord, setExpandedRecord] = useState(null);
 
   const fetchData = async () => {
-    const token = localStorage.getItem("aarogyam_token");
-    if (!token) {
-      signOut(router);
-      return;
-    }
+    // Read user email from sessionStorage (set after login)
+    const storedEmail = sessionStorage.getItem('aarogyam_user_email');
+    if (storedEmail) setUserEmail(storedEmail);
 
     try {
-      const profileRes = await fetch("/api/patients/profile", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const profileRes = await fetch("/api/patients/profile");
 
       const profileData = await profileRes.json();
 
       if (profileRes.ok) {
         setProfile(profileData.profile);
-        setUserEmail(profileData.email || '');
+        if (profileData.email) setUserEmail(profileData.email);
 
         // Check if profile is complete
         if (!profileData.profileComplete) {
@@ -68,8 +63,7 @@ export default function PatientDashboard() {
               dateOfBirth: profileData.profile.dateOfBirth || '',
               gender: profileData.profile.gender || '',
               contact: profileData.profile.contact || '',
-              newPassword: '',
-            });
+              newPassword: ''});
           }
         }
       } else if (profileRes.status === 401 || profileRes.status === 403) {
@@ -86,16 +80,12 @@ export default function PatientDashboard() {
     e.preventDefault();
     setProfileLoading(true);
     setProfileError('');
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients/profile', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(profileForm),
-      });
+          'Content-Type': 'application/json'},
+        body: JSON.stringify(profileForm)});
       const data = await res.json();
       if (res.ok) {
         setNeedsProfile(false);
@@ -123,23 +113,18 @@ export default function PatientDashboard() {
     setPwLoading(true);
     setPwError('');
     setPwSuccess('');
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients/profile', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           fullName: profile?.fullName || '',
           dateOfBirth: profile?.dateOfBirth || '',
           gender: profile?.gender || '',
           contact: profile?.contact || '',
           newPassword: pwForm.newPassword,
-          currentPassword: pwForm.currentPassword,
-        }),
-      });
+          currentPassword: pwForm.currentPassword})});
       const data = await res.json();
       if (res.ok) {
         setPwSuccess('Password updated successfully!');
@@ -155,9 +140,8 @@ export default function PatientDashboard() {
   }
 
   async function fetchMedicalRecords() {
-    const token = localStorage.getItem('aarogyam_token');
     const res = await fetch('/api/prescriptions', {
-      headers: { 'Authorization': `Bearer ${token}` }
+      
     });
     if (res.ok) {
       const data = await res.json();
@@ -591,7 +575,7 @@ export default function PatientDashboard() {
                                 <div key={rx.id}
                                   className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-slate-100 text-sm">
                                   <span className="font-medium text-slate-700">
-                                    {rx.medicationName} ({rx.dosage})
+                                    {rx.medicationName}{rx.dosage ? ` (${rx.dosage})` : ''}
                                   </span>
                                   <div className="flex items-center gap-3 text-slate-500 text-xs">
                                     <span>{rx.frequency}</span>

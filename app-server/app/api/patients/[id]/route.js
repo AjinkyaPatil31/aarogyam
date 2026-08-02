@@ -1,24 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
 // GET /api/patients/:id — fetch single patient with full medical history
 export async function GET(request, { params }) {
-  const authHeader = request.headers.get('authorization')
-                  ?? request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  const token = authHeader.split(' ')[1];
-  const payload = await verifyToken(token);
-  if (!payload) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (payload.role !== 'DOCTOR' && payload.role !== 'COMPOUNDER') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  const { payload, errorResponse } = await requireRole(request, ['DOCTOR', 'COMPOUNDER']);
+  if (errorResponse) return errorResponse;
 
   try {
     const { id } = await params;

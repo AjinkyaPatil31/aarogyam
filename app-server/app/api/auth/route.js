@@ -39,7 +39,22 @@ export async function POST(req) {
       });
       const { passwordHash: _, ...safeUser } = user;
       const token = await signToken({ id: user.id, email: user.email, role: user.role });
-      return NextResponse.json({ user: safeUser, token }, { status: 201 });
+      
+      const response = NextResponse.json({ user: safeUser }, { status: 201 });
+      
+      // Determine sliding session timeout from env vars
+      const timeoutMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
+      const maxAge = timeoutMinutes * 60;
+      
+      response.cookies.set('aarogyam_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: maxAge
+      });
+      
+      return response;
     }
 
     // ── LOGIN ──
@@ -67,7 +82,22 @@ export async function POST(req) {
       }
       const { passwordHash: _, ...safeUser } = user;
       const token = await signToken({ id: user.id, email: user.email, role: user.role });
-      return NextResponse.json({ user: safeUser, token });
+      
+      const response = NextResponse.json({ user: safeUser });
+      
+      // Determine sliding session timeout from env vars
+      const timeoutMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
+      const maxAge = timeoutMinutes * 60;
+      
+      response.cookies.set('aarogyam_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: maxAge
+      });
+      
+      return response;
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

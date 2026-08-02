@@ -4,23 +4,12 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 /* ──────────────────────────────────────────────────────────────────────────────
-   Helper — decode JWT payload on the client
-   ──────────────────────────────────────────────────────────────────────────── */
-function decodeToken(token) {
-  try {
-    const payload = token.split(".")[1];
-    return JSON.parse(atob(payload));
-  } catch {
-    return null;
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────────────────────
    Sign Out helper
    ──────────────────────────────────────────────────────────────────────────── */
 function signOut(router) {
-  localStorage.removeItem("aarogyam_token");
   document.cookie = "aarogyam_token=; path=/; max-age=0; SameSite=Lax";
+  sessionStorage.removeItem('aarogyam_user_email');
+  sessionStorage.removeItem('aarogyam_user_role');
   router.push("/login");
 }
 
@@ -231,8 +220,7 @@ function PatientDirectory({ patients, loading, searchQuery, onSearchChange, onEd
                           {
                             month: "short",
                             day: "numeric",
-                            year: "numeric",
-                          }
+                            year: "numeric"}
                         )}
                       </td>
                       <td className="px-4 py-3">
@@ -244,8 +232,7 @@ function PatientDirectory({ patients, loading, searchQuery, onSearchChange, onEd
                               contact: patient.contact,
                               dateOfBirth: patient.dateOfBirth || '',
                               gender: patient.gender || '',
-                              medicalHistory: patient.medicalHistory || '',
-                            })}
+                              medicalHistory: patient.medicalHistory || ''})}
                             className="text-xs px-3 py-1 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 font-medium transition-colors"
                           >
                             Edit
@@ -279,8 +266,7 @@ function RegisterPatientForm({ onRegistered }) {
     dob: "",
     gender: "",
     contact: "",
-    medicalHistory: "",
-  });
+    medicalHistory: ""});
   const [status, setStatus] = useState({ type: "", message: "" });
   const [loading, setLoading] = useState(false);
 
@@ -298,53 +284,43 @@ function RegisterPatientForm({ onRegistered }) {
     if (!isValidContact(form.contact)) {
       setStatus({
         type: "error",
-        message: "Contact number must be exactly 10 digits.",
-      });
+        message: "Contact number must be exactly 10 digits."});
       setLoading(false);
       return;
     }
 
-    const token = localStorage.getItem("aarogyam_token");
     try {
       const res = await fetch("/api/patients", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+          "Content-Type": "application/json"},
         body: JSON.stringify({
           fullName: form.fullName,
           contact: form.contact,
           dob: form.dob,
           gender: form.gender,
-          medicalHistory: form.medicalHistory,
-        }),
-      });
+          medicalHistory: form.medicalHistory})});
       const data = await res.json();
       if (res.ok) {
         setStatus({
           type: "success",
-          message: "Patient registered! Password sent via WhatsApp.",
-        });
+          message: "Patient registered! Password sent via WhatsApp."});
         setForm({
           fullName: "",
           dob: "",
           gender: "",
           contact: "",
-          medicalHistory: "",
-        });
+          medicalHistory: ""});
         onRegistered?.();
       } else {
         setStatus({
           type: "error",
-          message: data.error || "Failed to register patient.",
-        });
+          message: data.error || "Failed to register patient."});
       }
     } catch {
       setStatus({
         type: "error",
-        message: "Server connection error. Please try again.",
-      });
+        message: "Server connection error. Please try again."});
     } finally {
       setLoading(false);
     }
@@ -542,26 +518,14 @@ export default function CompounderDashboard() {
     currentPassword: '',
     newEmail: '',
     newPassword: '',
-    confirmPassword: '',
-  });
+    confirmPassword: ''});
   const [accountLoading, setAccountLoading] = useState(false);
   const [accountSuccess, setAccountSuccess] = useState('');
   const [accountError, setAccountError] = useState('');
 
   const fetchPatients = async () => {
-    const token = localStorage.getItem("aarogyam_token");
-    if (!token) {
-      signOut(router);
-      return;
-    }
-
     try {
-      const res = await fetch("/api/patients", {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const res = await fetch("/api/patients");
       const data = await res.json();
       if (res.ok) setPatients(data.patients || []);
       else setError(data.error || "Failed to load patients");
@@ -573,19 +537,17 @@ export default function CompounderDashboard() {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem("aarogyam_token");
-    if (!token) {
+    const email = sessionStorage.getItem('aarogyam_user_email');
+    const role = sessionStorage.getItem('aarogyam_user_role');
+    if (!email || !role) {
       signOut(router);
       return;
     }
-
-    const payload = decodeToken(token);
-    if (!payload || payload.role !== "COMPOUNDER") {
+    if (role !== "COMPOUNDER") {
       signOut(router);
       return;
     }
-
-    setUserEmail(payload.email || "");
+    setUserEmail(email);
     setVerified(true);
     fetchPatients();
   }, []);
@@ -602,23 +564,18 @@ export default function CompounderDashboard() {
     }
 
     setActionLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients', {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           patientId: editPatient.id,
           fullName: editPatient.fullName,
           contact: digitsOnly,
           dateOfBirth: editPatient.dateOfBirth,
           gender: editPatient.gender,
-          medicalHistory: editPatient.medicalHistory,
-        }),
-      });
+          medicalHistory: editPatient.medicalHistory})});
       if (res.ok) {
         setEditStatus({ type: 'success', message: 'Patient updated successfully!' });
         setTimeout(() => {
@@ -640,16 +597,12 @@ export default function CompounderDashboard() {
 
   async function handleDelete() {
     setActionLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients', {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ patientId: deleteTarget.id }),
-      });
+          'Content-Type': 'application/json'},
+        body: JSON.stringify({ patientId: deleteTarget.id })});
       if (res.ok) {
         setDeleteTarget(null);
         await fetchPatients();
@@ -676,20 +629,15 @@ export default function CompounderDashboard() {
     }
 
     setAccountLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/staff/account', {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           currentPassword: accountForm.currentPassword,
           newEmail: accountForm.newEmail || undefined,
-          newPassword: accountForm.newPassword || undefined,
-        }),
-      });
+          newPassword: accountForm.newPassword || undefined})});
       const data = await res.json();
       if (res.ok) {
         setAccountSuccess(
@@ -701,11 +649,9 @@ export default function CompounderDashboard() {
           currentPassword: '',
           newEmail: '',
           newPassword: '',
-          confirmPassword: '',
-        });
+          confirmPassword: ''});
         if (data.emailChanged) {
           setTimeout(() => {
-            localStorage.removeItem('aarogyam_token');
             document.cookie = 'aarogyam_token=; Max-Age=0; path=/';
             router.push('/login');
           }, 2500);

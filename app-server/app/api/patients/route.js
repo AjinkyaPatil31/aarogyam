@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
-import { verifyToken } from "@/app/api/lib/jwt";
+import { requireAuth, requireRole } from "@/app/lib/authHelpers";
 import bcrypt from "bcryptjs";
 
 // Forces Next.js to use the standard Node.js runtime (not Edge)
@@ -15,16 +15,8 @@ export const runtime = 'nodejs';
  *     (no param)  — returns all patients (DOCTOR-only)
  */
 export async function GET(request) {
-  const authHeader = request.headers.get('authorization')
-                ?? request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  const token = authHeader.split(' ')[1];
-  const payload = await verifyToken(token);
-  if (!payload) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { payload, errorResponse } = await requireAuth(request);
+  if (errorResponse) return errorResponse;
 
   try {
     const url = new URL(request.url);
@@ -100,26 +92,14 @@ export async function GET(request) {
 
 /**
  * POST /api/patients
- *   Register a new patient (DOCTOR-only). Creates both the User and
+ *   Register a new patient (DOCTOR/COMPOUNDER). Creates both the User and
  *   PatientProfile records in a single transaction.
  *
  *   Body: { email, password, fullName, contact, medicalHistory?, gender?, dob? }
  */
 export async function POST(request) {
-  const authHeader = request.headers.get('authorization')
-                ?? request.headers.get('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  const token = authHeader.split(' ')[1];
-  const payload = await verifyToken(token);
-  if (!payload) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  if (payload.role !== "DOCTOR" && payload.role !== "COMPOUNDER") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const { payload, errorResponse } = await requireRole(request, ['DOCTOR', 'COMPOUNDER']);
+  if (errorResponse) return errorResponse;
 
   try {
     const body = await request.json();
@@ -182,31 +162,14 @@ export async function POST(request) {
       include: { patientProfile: true },
     });
 
-    // Write directly to wa-queue.json (no HTTP needed)
-    try {
-      const { writeFileSync, readFileSync, existsSync } = await import('fs');
-      const { join } = await import('path');
-
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-      const QUEUE_FILE = join(process.cwd(), 'wa-queue.json');
-      let queue = [];
-      if (existsSync(QUEUE_FILE)) {
-        try { queue = JSON.parse(readFileSync(QUEUE_FILE, 'utf8')); }
-        catch { queue = []; }
-      }
-
-      queue.push({
-        id: Date.now().toString(),
-        phone: contact.replace(/[^0-9]/g, ''),
-        message: `*Aarogyam Healthcare* 🏥\n\nGreetings ${fullName},\n\nWelcome! Your profile has been created.\n\n*User ID:* ${email}\n*Password:* ${password}\n\nLogin at: ${appUrl}/login\n\n_If required, change your password after first login._`,
-        createdAt: new Date().toISOString(),
-        sent: false,
-      });
-
-      writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
-      console.log('📬 Message queued for WhatsApp:', contact);
-    } catch (waError) {
-      console.error('WhatsApp queue write failed (non-fatal):', waError.message);
+    try { 
+      const { sendWhatsAppMessage } = await import('@/app/lib/whatsappProvider'); 
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'; 
+      const message = `*Aarogyam Healthcare* 🏥\n\nGreetings ${fullName},\n\nWelcome! Your profile has been created.\n\n*User ID:* ${email}\n*Password:* ${password}\n\nLogin at: ${appUrl}/login\n\n_If required, change your password after first login._`; 
+ 
+      await sendWhatsAppMessage(contact, message); 
+    } catch (waError) { 
+      console.error('WhatsApp notification failed (non-fatal):', waError); 
     }
 
     return NextResponse.json(
@@ -230,16 +193,8 @@ export async function POST(request) {
 // ── DELETE patient (cascade delete everything) ──
 export async function DELETE(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'COMPOUNDER' && payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR', 'COMPOUNDER']);
+    if (errorResponse) return errorResponse;
 
     const { patientId } = await req.json();
     if (!patientId) {
@@ -291,16 +246,8 @@ export async function DELETE(req) {
 // ── PUT - update patient profile ──
 export async function PUT(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'COMPOUNDER' && payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR', 'COMPOUNDER']);
+    if (errorResponse) return errorResponse;
 
     const { patientId, fullName, contact, dateOfBirth, gender, medicalHistory } = await req.json();
     if (!patientId) {

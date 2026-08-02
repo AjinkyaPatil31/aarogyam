@@ -6,12 +6,11 @@
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
-export function generatePrescriptionPDF(record, patientName) {
+export function generatePrescriptionPDF(record, patientName, patientAge) {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
-    format: 'a4',
-  });
+    format: 'a4'});
 
   // A4 dimensions: 210mm x 297mm
   const pageWidth = 210;
@@ -86,11 +85,16 @@ export function generatePrescriptionPDF(record, patientName) {
   const dateText = `Date: ${record.consultationDate}`;
   doc.text(dateText, pageWidth - marginRight - 4, y + 7, { align: 'right' });
 
-  // Diagnosis below name
+  // Diagnosis below name (left), Age (right) — age computed on the fly
+  // from the patient's DOB at generation time, never stored.
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.setTextColor(71, 85, 105);
   doc.text(`Dx: ${record.diagnosis}`, marginLeft + 4, y + 13);
+
+  if (patientAge != null) {
+    doc.text(`Age: ${patientAge} Years`, pageWidth - marginRight - 4, y + 13, { align: 'right' });
+  }
 
   y += 22;
 
@@ -267,8 +271,7 @@ export function generatePrescriptionPDF(record, patientName) {
       dosage: marginLeft + 70,
       freq: marginLeft + 100,
       duration: marginLeft + 130,
-      instructions: marginLeft + 155,
-    };
+      instructions: marginLeft + 155};
 
     doc.setFillColor(226, 232, 240);
     doc.rect(marginLeft, y, contentWidth, 6, 'F');
@@ -296,9 +299,9 @@ export function generatePrescriptionPDF(record, patientName) {
       doc.setFont('helvetica', 'bold');
       doc.text(rx.medicationName, cols.name, y + 4);
       doc.setFont('helvetica', 'normal');
-      doc.text(rx.dosage, cols.dosage, y + 4);
-      doc.text(rx.frequency, cols.freq, y + 4);
-      doc.text(rx.duration, cols.duration, y + 4);
+      doc.text(rx.dosage || '—', cols.dosage, y + 4);
+      doc.text(rx.frequency || '—', cols.freq, y + 4);
+      doc.text(rx.duration || '—', cols.duration, y + 4);
       if (rx.instructions) {
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
@@ -346,17 +349,12 @@ export function generatePrescriptionPDF(record, patientName) {
 
   if (!doctorEmail && typeof window !== 'undefined') {
     try {
-      const token = window.localStorage.getItem('aarogyam_token');
-      if (token) {
-        // Safe base64 decode of the JWT payload to grab the logged-in user's email string
-        const payloadBase64 = token.split('.')[1];
-        const decoded = JSON.parse(window.atob(payloadBase64));
-        if (decoded && decoded.email) {
-          doctorEmail = decoded.email;
-        }
+      const storedEmail = sessionStorage.getItem('aarogyam_user_email');
+      if (storedEmail) {
+        doctorEmail = storedEmail;
       }
     } catch (e) {
-      console.error("Failed to parse doctor session for PDF:", e);
+      console.error("Failed to get doctor email for PDF:", e);
     }
   }
 

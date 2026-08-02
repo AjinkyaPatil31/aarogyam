@@ -19,21 +19,16 @@ function Toast({ toast, onClose }) {
   const styles = {
     success: {
       bg: 'bg-green-600',
-      icon: '✓',
-    },
+      icon: '✓'},
     error: {
       bg: 'bg-red-600',
-      icon: '✕',
-    },
+      icon: '✕'},
     info: {
       bg: 'bg-blue-600',
-      icon: 'ℹ',
-    },
+      icon: 'ℹ'},
     warning: {
       bg: 'bg-amber-500',
-      icon: '⚠',
-    },
-  };
+      icon: '⚠'}};
 
   const s = styles[toast.type] || styles.info;
 

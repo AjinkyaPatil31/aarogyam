@@ -34,3 +34,6 @@ wa-queue.json
 next-env.d.ts
 .wwebjs_auth
 .wwebjs_cache
+
+.vercel
+.env*

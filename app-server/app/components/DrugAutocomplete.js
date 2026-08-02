@@ -17,8 +17,7 @@ export default function DrugAutocomplete({ value, onChange, placeholder = 'Searc
     fuseRef.current = new Fuse(DRUGS, {
       threshold: 0.35,
       distance: 100,
-      minMatchCharLength: 2,
-    });
+      minMatchCharLength: 2});
   }, []);
 
   // Sync external value changes (e.g. row cleared)

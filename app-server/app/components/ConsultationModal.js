@@ -1,7 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import DrugAutocomplete from '@/app/components/DrugAutocomplete';
 import { generatePrescriptionPDF } from '@/app/lib/generatePrescriptionPDF';
+import { calculateAge } from '@/app/lib/ageUtils';
 
 function generateId() {
   return Math.random().toString(36).substring(2) +
@@ -9,6 +10,10 @@ function generateId() {
 }
 
 export default function ConsultationModal({ patient, onClose, onSaved }) {
+  // Patient's current age — computed on the fly from DOB at generation time
+  // (never stored; refreshes automatically as time passes).
+  const patientAge = calculateAge(patient.dateOfBirth);
+
   const [vitals, setVitals] = useState({
     symptoms: '',
     diagnosis: '',
@@ -39,8 +44,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
     historyCVA: false,
     historyCKD: false,
     historyHypothyroid: false,
-    historyCOPD: false,
-  });
+    historyCOPD: false});
 
   const [medications, setMedications] = useState([
     {
@@ -51,8 +55,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
       frequency: { morning: false, afternoon: false, night: false },
       durationValue: '',
       durationUnit: 'Days',
-      instructions: '',
-    },
+      instructions: ''},
   ]);
 
   const [specialInstructions, setSpecialInstructions] = useState('');
@@ -62,6 +65,28 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
   const [showPrintView, setShowPrintView] = useState(false);
   const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
   const [whatsAppSent, setWhatsAppSent] = useState(false);
+  const [revealActions, setRevealActions] = useState(false);
+  const printEndRef = useRef(null);
+
+  // Reveal the bottom action bar only once the doctor scrolls to the end
+  // of the prescription content (review-before-send workflow).
+  useEffect(() => {
+    if (!showPrintView || !savedRecord) return;
+    setRevealActions(false);
+    const sentinel = printEndRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setRevealActions(true);
+          observer.disconnect();
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [showPrintView, savedRecord]);
 
   function addMedRow() {
     setMedications([...medications, {
@@ -72,8 +97,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
       frequency: { morning: false, afternoon: false, night: false },
       durationValue: '',
       durationUnit: 'Days',
-      instructions: '',
-    }]);
+      instructions: ''}]);
   }
 
   function removeMedRow(id) {
@@ -108,21 +132,20 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
       return;
     }
     for (const med of medications) {
-      if (!med.name || !med.dosage || !med.durationValue) {
-        setError('Fill in name, dosage and duration for every medication.');
+      // Only the medication name is mandatory — dosage, duration and
+      // frequency are optional so the doctor can decide what to specify.
+      if (!med.name) {
+        setError('Every medication must have a name.');
         return;
       }
     }
 
     setLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/prescriptions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           patientId: patient.patientId,
           appointmentId: patient.appointmentId,
@@ -159,11 +182,9 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
           historyCOPD: vitals.historyCOPD,
           medications: medications.map(m => ({
             ...m,
-            dosage: `${m.dosage}${m.dosageUnit}`,
-          })),
-          specialInstructions,
-        }),
-      });
+            // Only append the unit when a dosage was actually entered
+            dosage: m.dosage ? `${m.dosage}${m.dosageUnit}` : ''})),
+          specialInstructions})});
       const data = await res.json();
       if (res.ok) {
         // Store record for print/WhatsApp
@@ -188,7 +209,8 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
           ...savedRecord,
           specialInstructions: savedRecord?.specialInstructions || savedRecord?.instructions || savedRecord?.advice || specialInstructions || ''
         },
-        patient.patientName
+        patient.patientName,
+        patientAge
       );
 
       // 2. Open print dialog in new tab
@@ -208,13 +230,17 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
 
       // 4. Send WhatsApp message
       const meds = savedRecord.prescriptions?.map(rx =>
-        `• *${rx.medicationName} (${rx.dosage})* | ${rx.frequency} | ${rx.duration}${rx.instructions ? '\n  _' + rx.instructions + '_' : ''}`
+        `• *${rx.medicationName}${rx.dosage ? ` (${rx.dosage})` : ''}* | ${rx.frequency || '—'} | ${rx.duration || '—'}${rx.instructions ? '\n  _' + rx.instructions + '_' : ''}`
       ).join('\n') || 'No medications';
 
-      const message =
+      let message =
         `*AAROGYAM HEALTHCARE* 🏥\n` +
         `──────────────────\n` +
-        `*Patient:* ${patient.patientName}\n` +
+        `*Patient:* ${patient.patientName}\n`;
+      if (patientAge != null) {
+        message += `*Age:* ${patientAge} Years\n`;
+      }
+      message +=
         `*Date:* ${savedRecord.consultationDate}\n` +
         `*Diagnosis:* ${savedRecord.diagnosis}\n\n` +
         `*Rx Prescribed:*\n${meds}\n\n` +
@@ -229,8 +255,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
         await fetch('/api/share', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, message }),
-        });
+          body: JSON.stringify({ phone, message })});
       }
 
       setWhatsAppSent(true);
@@ -247,25 +272,10 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
       <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-8">
           {/* Print preview header */}
-          <div className="flex items-center justify-between p-6 border-b border-slate-100 no-print">
+          <div className="p-6 border-b border-slate-100 no-print">
             <h2 className="text-lg font-semibold text-slate-800">
               Prescription Ready
             </h2>
-            <div className="flex gap-2">
-              <button
-                onClick={handlePrintAndSend}
-                disabled={sendingWhatsApp}
-                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
-              >
-                {sendingWhatsApp ? 'Generating...' : '🖨️ Print & Send WhatsApp'}
-              </button>
-              <button
-                onClick={() => { onSaved(savedRecord); }}
-                className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200"
-              >
-                Done
-              </button>
-            </div>
           </div>
 
           {/* Prescription print body */}
@@ -291,6 +301,11 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
               <div>
                 <p className="text-xs text-slate-400 uppercase">Patient</p>
                 <p className="font-semibold text-slate-800">{patient.patientName}</p>
+                {patientAge != null && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Age: {patientAge} Years
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-xs text-slate-400 uppercase">Date</p>
@@ -421,8 +436,8 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
               </div>
             )}
 
-            {/* Footer signature */}
-            <div className="flex justify-end mt-8 pt-4 border-t border-slate-200">
+            {/* Footer signature — acts as the "end of prescription" sentinel */}
+            <div ref={printEndRef} className="flex justify-end mt-8 pt-4 border-t border-slate-200">
               <div className="text-right">
                 <p className="text-sm font-script text-slate-600 italic">
                   Digitally Signed by Aarogyam Healthcare
@@ -437,6 +452,32 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
               ✅ Prescription sent to patient via WhatsApp
             </div>
           )}
+
+          {/* Bottom action bar — appears only after the doctor scrolls to the
+              end of the prescription (review-before-send workflow) */}
+          <div
+            className={`no-print border-t border-slate-100 p-4 sm:p-6 transition-all duration-500 ease-out ${
+              revealActions
+                ? 'opacity-100 translate-y-0'
+                : 'opacity-0 translate-y-3 pointer-events-none'
+            }`}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-end sm:items-center">
+              <button
+                onClick={handlePrintAndSend}
+                disabled={sendingWhatsApp}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {sendingWhatsApp ? 'Generating...' : '🖨️ Print & Send WhatsApp'}
+              </button>
+              <button
+                onClick={() => { onSaved(savedRecord); }}
+                className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-200"
+              >
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -747,18 +788,9 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
 
             {/* Medications */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
-                  Prescription
-                </h3>
-                <button
-                  type="button"
-                  onClick={addMedRow}
-                  className="text-xs px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium"
-                >
-                  + Add Medication
-                </button>
-              </div>
+              <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wide mb-3">
+                Prescription
+              </h3>
 
               <div className="flex flex-col gap-3">
                 {medications.map((med, idx) => (
@@ -779,7 +811,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
                       </div>
                       <div>
                         <label className="text-xs font-medium text-slate-500">
-                          Dosage *
+                          Dosage
                         </label>
                         <div className="flex gap-1 mt-1">
                           <input
@@ -843,7 +875,7 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
                       </div>
                       <div>
                         <label className="text-xs font-medium text-slate-500">
-                          Duration *
+                          Duration
                         </label>
                         <div className="flex gap-1 mt-1">
                           <input
@@ -888,6 +920,14 @@ export default function ConsultationModal({ patient, onClose, onSaved }) {
                   </div>
                 ))}
               </div>
+
+              <button
+                type="button"
+                onClick={addMedRow}
+                className="mt-3 text-xs px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium"
+              >
+                + Add Medication
+              </button>
             </div>
 
             {/* Special Instructions */}

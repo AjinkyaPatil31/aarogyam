@@ -1,25 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
-
-async function getPayload(req) {
-  const authHeader = req.headers.get('authorization')
-                  ?? req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) return null;
-  const token = authHeader.split(' ')[1];
-  try { return await verifyToken(token); }
-  catch { return null; }
-}
 
 // GET — fetch prescriptions for a patient or by record
 export async function GET(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const { searchParams } = new URL(req.url);
     const patientId = searchParams.get('patientId');
@@ -85,16 +74,8 @@ function isParsableNumeric(v) {
 // ────────────────────────────────────────────────────────────────────────────
 export async function POST(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    if (payload.role !== 'DOCTOR') {
-      return NextResponse.json(
-        { error: 'Only doctors can create prescriptions' },
-        { status: 403 }
-      );
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR']);
+    if (errorResponse) return errorResponse;
 
     const body = await req.json();
 
@@ -214,31 +195,8 @@ export async function POST(req) {
           { status: 400 }
         );
       }
-      if (!isNonEmptyString(med.dosage)) {
-        return NextResponse.json(
-          { error: `Validation failed: medication #${idx} ("${med.name}") is missing dosage` },
-          { status: 400 }
-        );
-      }
-      if (!med.frequency || typeof med.frequency !== 'object') {
-        return NextResponse.json(
-          { error: `Validation failed: medication #${idx} ("${med.name}") is missing frequency object` },
-          { status: 400 }
-        );
-      }
-      const hasTimeSlot = med.frequency?.morning || med.frequency?.afternoon || med.frequency?.night;
-      if (!hasTimeSlot) {
-        return NextResponse.json(
-          { error: `Validation failed: medication #${idx} ("${med.name}") must have at least one time slot selected (morning/afternoon/night)` },
-          { status: 400 }
-        );
-      }
-      if (!isNonEmptyString(med.durationValue)) {
-        return NextResponse.json(
-          { error: `Validation failed: medication #${idx} ("${med.name}") is missing duration value` },
-          { status: 400 }
-        );
-      }
+      // Only the medication name is mandatory. Dosage, duration and
+      // frequency are optional — the doctor decides what to specify.
     }
 
     // ── Transaction: create record + all prescription rows atomically ────
@@ -284,19 +242,29 @@ export async function POST(req) {
 
       // Create all prescription rows
       for (const med of medications) {
-        const freq = [
-          med.frequency?.morning ? '1' : '0',
-          med.frequency?.afternoon ? '1' : '0',
-          med.frequency?.night ? '1' : '0',
-        ].join('-');
+        // Store an empty frequency when no time slot is selected so the
+        // preview / PDF / WhatsApp fall back to '—' instead of '0-0-0'.
+        const hasFreqSlot =
+          med.frequency?.morning ||
+          med.frequency?.afternoon ||
+          med.frequency?.night;
+        const freq = hasFreqSlot
+          ? [
+              med.frequency.morning ? '1' : '0',
+              med.frequency.afternoon ? '1' : '0',
+              med.frequency.night ? '1' : '0',
+            ].join('-')
+          : '';
 
         await tx.prescription.create({
           data: {
             recordId: medRecord.id,
             medicationName: med.name,
-            dosage: med.dosage,
+            dosage: med.dosage || '',
             frequency: freq,
-            duration: `${med.durationValue} ${med.durationUnit}`,
+            duration: isNonEmptyString(med.durationValue)
+              ? `${med.durationValue} ${med.durationUnit || 'Days'}`
+              : '',
             instructions: med.instructions || null,
           },
         });

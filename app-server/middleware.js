@@ -1,9 +1,27 @@
 import { NextResponse } from 'next/server';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { verifyToken, signToken } from '@/app/api/lib/jwt';
 
 export async function middleware(req) {
   const { pathname } = req.nextUrl;
-  const token = req.cookies.get('aarogyam_token')?.value;
+  
+  // Exclude public auth endpoints (including the main /api/auth POST handler)
+  if (
+    pathname === '/api/auth' ||
+    pathname.startsWith('/api/auth/login') || 
+    pathname.startsWith('/api/auth/register') || 
+    pathname.startsWith('/api/auth/logout') ||
+    pathname.startsWith('/api/auth/refresh')
+  ) {
+    return NextResponse.next();
+  }
+
+  let token = req.cookies.get('aarogyam_token')?.value;
+  if (!token) {
+    const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    }
+  }
 
   const roleRoutes = {
     '/dashboard/doctor':     'DOCTOR',
@@ -11,35 +29,80 @@ export async function middleware(req) {
     '/dashboard/patient':    'PATIENT',
   };
 
-  const matchedRole = Object.keys(roleRoutes).find(path =>
-    pathname.startsWith(path)
-  );
+  const matchedRole = Object.keys(roleRoutes).find(path => pathname.startsWith(path));
+  const isApiRoute = pathname.startsWith('/api/');
 
-  if (!matchedRole) return NextResponse.next();
+  // If not a protected dashboard route and not an API route, allow through
+  if (!matchedRole && !isApiRoute) {
+    return NextResponse.next();
+  }
 
   if (!token) {
+    if (isApiRoute) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    }
     return NextResponse.redirect(new URL('/login', req.url));
   }
 
   try {
     const payload = await verifyToken(token);
-    const requiredRole = roleRoutes[matchedRole];
-    if (payload.role !== requiredRole) {
-      const redirectMap = {
-        DOCTOR:     '/dashboard/doctor',
-        COMPOUNDER: '/dashboard/compounder',
-        PATIENT:    '/dashboard/patient',
-      };
-      return NextResponse.redirect(
-        new URL(redirectMap[payload.role] ?? '/login', req.url)
-      );
+    
+    // Explicit null check if token was invalid/expired
+    if (!payload) {
+      throw new Error('Invalid or expired token');
     }
-    return NextResponse.next();
-  } catch {
-    return NextResponse.redirect(new URL('/login', req.url));
+    
+    // Authorization check for dashboard routes
+    if (matchedRole) {
+      const requiredRole = roleRoutes[matchedRole];
+      if (payload.role !== requiredRole) {
+        const redirectMap = {
+          DOCTOR:     '/dashboard/doctor',
+          COMPOUNDER: '/dashboard/compounder',
+          PATIENT:    '/dashboard/patient',
+        };
+        return NextResponse.redirect(
+          new URL(redirectMap[payload.role] ?? '/login', req.url)
+        );
+      }
+    }
+
+    const response = NextResponse.next();
+
+    // Sliding session logic
+    const exp = payload.exp; // expiry timestamp in seconds
+    const now = Math.floor(Date.now() / 1000);
+    const timeRemaining = exp - now;
+    
+    const thresholdMinutes = parseInt(process.env.SESSION_REFRESH_THRESHOLD_MINUTES || '15', 10);
+    const thresholdSeconds = thresholdMinutes * 60;
+    
+    if (timeRemaining <= thresholdSeconds) {
+      const idleMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
+      const newPayload = { id: payload.id, email: payload.email, role: payload.role };
+      const newToken = await signToken(newPayload);
+      
+      response.cookies.set('aarogyam_token', newToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/',
+        maxAge: idleMinutes * 60,
+      });
+    }
+
+    return response;
+  } catch (err) {
+    if (isApiRoute) {
+      return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+    }
+    return NextResponse.redirect(new URL('/login?reason=expired', req.url));
   }
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*'],
+  matcher: [
+    '/dashboard/:path*',
+    '/api/:path*'
+  ],
 };

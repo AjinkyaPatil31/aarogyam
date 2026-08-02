@@ -1,24 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
 // POST /api/consultation — save walk-in consultation + prescriptions
 export async function POST(request) {
-  const authHeader = request.headers.get('authorization')
-                  ?? request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  const token = authHeader.split(' ')[1];
-  const payload = await verifyToken(token);
-  if (!payload) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (payload.role !== 'DOCTOR') {
-    return NextResponse.json({ error: 'Only doctors can save consultations' }, { status: 403 });
-  }
+  const { payload, errorResponse } = await requireRole(request, ['DOCTOR']);
+  if (errorResponse) return errorResponse;
 
   try {
     const body = await request.json();
@@ -129,16 +118,8 @@ export async function POST(request) {
 
 // GET /api/consultation?patientId=xxx — fetch all consultations for a patient
 export async function GET(request) {
-  const authHeader = request.headers.get('authorization')
-                  ?? request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  const token = authHeader.split(' ')[1];
-  const payload = await verifyToken(token);
-  if (!payload) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const { payload, errorResponse } = await requireAuth(request);
+  if (errorResponse) return errorResponse;
 
   try {
     const { searchParams } = new URL(request.url);

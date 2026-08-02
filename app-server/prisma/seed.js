@@ -1,10 +1,43 @@
 const { PrismaClient } = require('@prisma/client');
+const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
 async function main() {
+  console.log('--- DB CLEANUP & INITIALIZATION ---');
+
+  // 1. Clean up all transactional data (leaving Drugs alone as they are the master catalog)
+  console.log('Cleaning up users, patients, appointments, and records...');
+  await prisma.prescription.deleteMany({});
+  await prisma.medicalRecord.deleteMany({});
+  await prisma.appointment.deleteMany({});
+  await prisma.patientProfile.deleteMany({});
+  await prisma.user.deleteMany({});
+
+  // 2. Create Initial Accounts
+  console.log('Creating initial accounts...');
+  const doctorHash = await bcrypt.hash('Doctor@123', 12);
+  const compounderHash = await bcrypt.hash('Compounder@123', 12);
+
+  await prisma.user.create({
+    data: {
+      email: 'doctor@aarogyam.local',
+      passwordHash: doctorHash,
+      role: 'DOCTOR',
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      email: 'compounder@aarogyam.local',
+      passwordHash: compounderHash,
+      role: 'COMPOUNDER',
+    },
+  });
+  console.log('Initial accounts created successfully.');
+
+  // 3. Seed Master Drug Catalog
   console.log('Syncing database with guaranteed 10,000 Indian formulary dataset...');
 
-  // 1. Your exact verified clinical list injected directly as the absolute core
   const verifiedCore = [
     "Paracetamol", "Ibuprofen", "Diclofenac", "Aceclofenac", "Naproxen", "Ketorolac", "Mefenamic Acid", "Etoricoxib", 
     "Celecoxib", "Aspirin", "Tramadol", "Tapentadol", "Morphine", "Codeine", "Fentanyl", "Buprenorphine", "Piroxicam", 

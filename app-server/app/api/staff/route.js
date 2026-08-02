@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireRole } from '@/app/lib/authHelpers';
 import bcrypt from 'bcryptjs';
 
 export const runtime = 'nodejs';
@@ -8,16 +8,8 @@ export const runtime = 'nodejs';
 // GET — list all staff (doctors and compounders)
 export async function GET(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR']);
+    if (errorResponse) return errorResponse;
 
     const staff = await prisma.user.findMany({
       where: { role: { in: ['DOCTOR', 'COMPOUNDER'] } },
@@ -35,16 +27,8 @@ export async function GET(req) {
 // POST — add new doctor or compounder
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR']);
+    if (errorResponse) return errorResponse;
 
     const { email, password, role } = await req.json();
 
@@ -91,16 +75,8 @@ export async function POST(req) {
 // DELETE — remove a staff member
 export async function DELETE(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR']);
+    if (errorResponse) return errorResponse;
 
     const { userId } = await req.json();
     if (!userId) {

@@ -17,7 +17,6 @@ export default function SessionGuard({ children }) {
         const currentPath = window.location.pathname;
         if (currentPath !== '/login') {
           // Evict stored credentials
-          localStorage.removeItem('aarogyam_token');
           document.cookie =
             'aarogyam_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 

@@ -1,51 +1,42 @@
 import { NextResponse } from 'next/server';
-import { join } from 'path';
-import {
-  acquireLock,
-  releaseLock,
-  readQueue,
-  writeQueue,
-} from '@/app/lib/waQueue';
+import { sendWhatsAppMessage } from '@/app/lib/whatsappProvider';
+import { requireRole } from '@/app/lib/authHelpers';
+import { apiResponse, apiError, handleServerError } from '@/app/lib/apiResponse';
 
 export const runtime = 'nodejs';
 
-const BASE_DIR = process.cwd();
-
 export async function POST(req) {
   try {
+    const authCheck = await requireRole(req, ['DOCTOR', 'COMPOUNDER']);
+    if (authCheck.errorResponse) return authCheck.errorResponse;
+
     const { phone, message } = await req.json();
     if (!phone || !message) {
-      return NextResponse.json(
-        { error: 'phone and message are required' },
-        { status: 400 }
-      );
+      return apiError('phone and message are required', 400);
     }
 
-    // ── Atomic lock → read → append → write → unlock ──────────────
-    await acquireLock(BASE_DIR);
     try {
-      const queue = readQueue(BASE_DIR);
-
-      queue.push({
-        id: Date.now().toString(),
-        phone: phone.replace(/[^0-9]/g, ''),
-        message,
-        createdAt: new Date().toISOString(),
-        sent: false,
-      });
-
-      writeQueue(BASE_DIR, queue);
-    } finally {
-      releaseLock(BASE_DIR);
+      await sendWhatsAppMessage(phone, message);
+      console.log(`📬 Message sent/queued for ${phone}`);
+      return apiResponse({ success: true, queued: true });
+    } catch (waError) {
+      console.error('WhatsApp Provider error:', waError);
+      // Preserve Twilio error details: HTTP status, error code, and error message
+      const statusCode = waError.status || 500;
+      const detail = waError.twilioMoreInfo ? ` (see: ${waError.twilioMoreInfo})` : '';
+      const errorMessage = waError.message || 'WhatsApp delivery failed';
+      const responsePayload = { error: errorMessage };
+      if (waError.code !== undefined) {
+        responsePayload.twilioCode = waError.code;
+      }
+      // Map Twilio infrastructure errors (4xx) to 502 Bad Gateway
+      if (statusCode >= 400 && statusCode < 500) {
+        return apiError(`WhatsApp service error: ${errorMessage}${detail}`, 502);
+      }
+      return apiError(errorMessage, statusCode);
     }
-
-    console.log(`📬 Message queued for ${phone}`);
-    return NextResponse.json({ success: true, queued: true });
   } catch (err) {
     console.error('Share route error:', err);
-    return NextResponse.json(
-      { error: err.message },
-      { status: 500 }
-    );
+    return handleServerError(err);
   }
 }

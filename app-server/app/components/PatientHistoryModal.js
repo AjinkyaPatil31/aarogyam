@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { generatePrescriptionPDF } from '../lib/generatePrescriptionPDF';
+import { calculateAge } from '../lib/ageUtils';
 
 const vitalsColorMap = {
   blue: 'bg-blue-100 text-blue-800',
@@ -8,8 +9,7 @@ const vitalsColorMap = {
   orange: 'bg-orange-100 text-orange-800',
   green: 'bg-green-100 text-green-800',
   purple: 'bg-purple-100 text-purple-800',
-  teal: 'bg-teal-100 text-teal-800',
-};
+  teal: 'bg-teal-100 text-teal-800'};
 
 export default function PatientHistoryModal({ patient, onClose }) {
   const [records, setRecords] = useState([]);
@@ -22,7 +22,11 @@ export default function PatientHistoryModal({ patient, onClose }) {
 
   async function handleReprint(record) {
     try {
-      const doc = await generatePrescriptionPDF(record, patient.patientName);
+      const doc = await generatePrescriptionPDF(
+        record,
+        patient.patientName,
+        calculateAge(patient.dateOfBirth)
+      );
       const pdfBlob = doc.output('blob');
       const pdfUrl = URL.createObjectURL(pdfBlob);
       const printWindow = window.open(pdfUrl, '_blank');
@@ -41,11 +45,10 @@ export default function PatientHistoryModal({ patient, onClose }) {
 
   async function fetchHistory() {
     setLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch(
         `/api/prescriptions?patientId=${patient.patientId}`,
-        { headers: { 'Authorization': `Bearer ${token}` } }
+        {  }
       );
       if (res.ok) {
         const data = await res.json();

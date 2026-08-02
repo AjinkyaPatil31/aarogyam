@@ -18,7 +18,7 @@ function LoginForm() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('reason') === 'expired' || params.get('message') === 'expired') {
-        setSessionMessage('Your session has expired. Please log in again.');
+        setSessionMessage('Your session expired due to inactivity. Please sign in again.');
       }
     }
   }, []);
@@ -35,20 +35,18 @@ function LoginForm() {
         body: JSON.stringify({
           action: "login",
           email,
-          password,
-        }),
-      });
+          password})});
 
       const data = await response.json();
 
       if (response.ok) {
-        // Persist JWT session token in both localStorage (SPA use)
-        // and a server-readable cookie (middleware auth check)
-        localStorage.setItem("aarogyam_token", data.token);
-        document.cookie = `aarogyam_token=${data.token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
-
-        // Start token auto-refresh after login
-        startTokenRefresh();
+        // Token is set exclusively via secure HttpOnly cookie by the backend route.
+        // Store minimal user info in sessionStorage for dashboard display purposes.
+        // sessionStorage is cleared when the tab closes, unlike localStorage.
+        if (data.user?.email) {
+          sessionStorage.setItem('aarogyam_user_email', data.user.email);
+          sessionStorage.setItem('aarogyam_user_role', data.user.role);
+        }
 
         // Zero-page-reload redirect — prefer the intended destination
         // (set by middleware when blocking an unauthenticated request),
@@ -75,65 +73,17 @@ function LoginForm() {
     }
   };
 
-  function startTokenRefresh() {
-    // Clear any existing interval
-    if (window._tokenRefreshInterval) {
-      clearInterval(window._tokenRefreshInterval);
-    }
-
-    window._tokenRefreshInterval = setInterval(async () => {
-      const token = localStorage.getItem('aarogyam_token');
-      if (!token) {
-        clearInterval(window._tokenRefreshInterval);
-        return;
-      }
-
-      try {
-        // Decode token to check expiry
-        const parts = token.split('.');
-        const payload = JSON.parse(atob(parts[1]));
-        const expiresIn = payload.exp - Math.floor(Date.now() / 1000);
-
-        // Refresh if less than 60 minutes remaining
-        if (expiresIn < 3600) {
-          const res = await fetch('/api/auth/refresh', {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            localStorage.setItem('aarogyam_token', data.token);
-            document.cookie = `aarogyam_token=${data.token}; path=/; SameSite=Strict`;
-            console.log('Token refreshed successfully');
-          } else {
-            // Refresh failed — clear token
-            localStorage.removeItem('aarogyam_token');
-            document.cookie = 'aarogyam_token=; Max-Age=0; path=/';
-            window.location.href = '/login?reason=expired';
-          }
-        }
-      } catch (err) {
-        console.error('Token refresh error:', err);
-      }
-    }, 15 * 60 * 1000); // check every 15 minutes
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 flex items-center justify-center p-4">
-      <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-100">
-
-        {/* Branding */}
+      <div className="bg-white p-8 rounded-xl shadow-xl border border-gray-100 max-w-md w-full relative z-10 mx-4">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-blue-600 text-white text-2xl font-bold mb-4 shadow-md">
-            A
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 text-blue-600 rounded-full mb-4">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+            </svg>
           </div>
-          <h1 className="text-3xl font-bold text-slate-900 mb-1">
-            Aarogyam
-          </h1>
+          <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Welcome to Aarogyam</h1>
           <p className="text-slate-500 text-sm">
             Healthcare Ecosystem — Authorized Personnel Only
           </p>

@@ -6,19 +6,7 @@ import ConsultationModal from '@/app/components/ConsultationModal';
 import PatientHistoryModal from '@/app/components/PatientHistoryModal';
 import DashboardHeader from '@/app/components/DashboardHeader';
 import ErrorBoundary from '@/app/components/ErrorBoundary';
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   Calculate age from date of birth string
-   ──────────────────────────────────────────────────────────────────────────── */
-function calculateAge(dob) {
-  if (!dob) return '—';
-  const today = new Date();
-  const birth = new Date(dob);
-  let age = today.getFullYear() - birth.getFullYear();
-  const m = today.getMonth() - birth.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
-  return age;
-}
+import { calculateAge } from '@/app/lib/ageUtils';
 
 /* ──────────────────────────────────────────────────────────────────────────────
    Main Doctor Dashboard Page
@@ -50,8 +38,7 @@ export default function DoctorDashboard() {
     currentPassword: '',
     newEmail: '',
     newPassword: '',
-    confirmPassword: '',
-  });
+    confirmPassword: ''});
   const [accountLoading, setAccountLoading] = useState(false);
   const [accountSuccess, setAccountSuccess] = useState('');
   const [accountError, setAccountError] = useState('');
@@ -59,9 +46,8 @@ export default function DoctorDashboard() {
   /* ── API Functions ── */
 
   async function fetchPatients() {
-    const token = localStorage.getItem('aarogyam_token');
     const res = await fetch('/api/patients', {
-      headers: { 'Authorization': `Bearer ${token}` }
+      
     });
     if (res.ok) {
       const data = await res.json();
@@ -70,9 +56,8 @@ export default function DoctorDashboard() {
   }
 
   async function fetchStaff() {
-    const token = localStorage.getItem('aarogyam_token');
     const res = await fetch('/api/staff', {
-      headers: { 'Authorization': `Bearer ${token}` }
+      
     });
     if (res.ok) {
       const data = await res.json();
@@ -85,22 +70,17 @@ export default function DoctorDashboard() {
     setRegLoading(true);
     setRegError('');
     setRegSuccess('');
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           fullName: regForm.fullName,
           dob: regForm.dob,
           gender: regForm.gender,
           contact: regForm.contact,
-          medicalHistory: regForm.medicalHistory,
-        }),
-      });
+          medicalHistory: regForm.medicalHistory})});
       const data = await res.json();
       if (res.ok) {
         await fetchPatients();
@@ -112,8 +92,8 @@ export default function DoctorDashboard() {
             patientId: newPatientId,
             patientName: regForm.fullName,
             contact: regForm.contact,
-            appointmentId: null,
-          });
+            dateOfBirth: regForm.dob,
+            appointmentId: null});
           setView('directory');
         } else {
           setRegSuccess('Patient registered! Password sent via WhatsApp.');
@@ -132,23 +112,18 @@ export default function DoctorDashboard() {
   async function handleEdit(e) {
     e.preventDefault();
     setActionLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients', {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           patientId: editPatient.id,
           fullName: editPatient.fullName,
           contact: editPatient.contact,
           dateOfBirth: editPatient.dateOfBirth,
           gender: editPatient.gender,
-          medicalHistory: editPatient.medicalHistory,
-        }),
-      });
+          medicalHistory: editPatient.medicalHistory})});
       if (res.ok) {
         setEditPatient(null);
         await fetchPatients();
@@ -162,16 +137,12 @@ export default function DoctorDashboard() {
 
   async function handleDelete() {
     setActionLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/patients', {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ patientId: deleteTarget.id }),
-      });
+          'Content-Type': 'application/json'},
+        body: JSON.stringify({ patientId: deleteTarget.id })});
       if (res.ok) {
         setDeleteTarget(null);
         await fetchPatients();
@@ -188,16 +159,12 @@ export default function DoctorDashboard() {
     setStaffLoading(true);
     setStaffError('');
     setStaffSuccess('');
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/staff', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(staffForm),
-      });
+          'Content-Type': 'application/json'},
+        body: JSON.stringify(staffForm)});
       const data = await res.json();
       if (res.ok) {
         setStaffSuccess(`${staffForm.role === 'DOCTOR' ? 'Doctor' : 'Compounder'} added successfully!`);
@@ -215,16 +182,12 @@ export default function DoctorDashboard() {
 
   async function handleDeleteStaff() {
     setStaffLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/staff', {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId: deleteStaffTarget.id }),
-      });
+          'Content-Type': 'application/json'},
+        body: JSON.stringify({ userId: deleteStaffTarget.id })});
       if (res.ok) {
         setDeleteStaffTarget(null);
         await fetchStaff();
@@ -238,14 +201,11 @@ export default function DoctorDashboard() {
 
   /* ── Mount Effect ── */
   useEffect(() => {
-    const token = localStorage.getItem('aarogyam_token');
-    if (!token) { router.push('/login'); return; }
-    try {
-      const parts = token.split('.');
-      const payload = JSON.parse(atob(parts[1]));
-      if (payload.role !== 'DOCTOR') { router.push('/login'); return; }
-      setUserEmail(payload.email || '');
-    } catch { router.push('/login'); return; }
+    const email = sessionStorage.getItem('aarogyam_user_email');
+    const role = sessionStorage.getItem('aarogyam_user_role');
+    if (!email || !role) { router.push('/login'); return; }
+    if (role !== 'DOCTOR') { router.push('/login'); return; }
+    setUserEmail(email);
     Promise.all([fetchPatients(), fetchStaff()]).finally(() => setLoading(false));
   }, []);
 
@@ -265,20 +225,15 @@ export default function DoctorDashboard() {
     }
 
     setAccountLoading(true);
-    const token = localStorage.getItem('aarogyam_token');
     try {
       const res = await fetch('/api/staff/account', {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+          'Content-Type': 'application/json'},
         body: JSON.stringify({
           currentPassword: accountForm.currentPassword,
           newEmail: accountForm.newEmail || undefined,
-          newPassword: accountForm.newPassword || undefined,
-        }),
-      });
+          newPassword: accountForm.newPassword || undefined})});
       const data = await res.json();
       if (res.ok) {
         setAccountSuccess(
@@ -290,12 +245,10 @@ export default function DoctorDashboard() {
           currentPassword: '',
           newEmail: '',
           newPassword: '',
-          confirmPassword: '',
-        });
+          confirmPassword: ''});
         // If email changed, force re-login after 2 seconds
         if (data.emailChanged) {
           setTimeout(() => {
-            localStorage.removeItem('aarogyam_token');
             document.cookie = 'aarogyam_token=; Max-Age=0; path=/';
             router.push('/login');
           }, 2500);
@@ -311,8 +264,9 @@ export default function DoctorDashboard() {
   }
 
   function handleSignOut() {
-    localStorage.removeItem('aarogyam_token');
     document.cookie = 'aarogyam_token=; Max-Age=0; path=/';
+    sessionStorage.removeItem('aarogyam_user_email');
+    sessionStorage.removeItem('aarogyam_user_role');
     router.push('/login');
   }
 
@@ -580,7 +534,7 @@ export default function DoctorDashboard() {
                           </div>
                         </td>
                         <td className="py-3.5 px-4 text-sm text-slate-600">
-                          {calculateAge(patient.dateOfBirth)}
+                          {calculateAge(patient.dateOfBirth) ?? '—'}
                         </td>
                         <td className="py-3.5 px-4 text-sm text-slate-600">
                           {patient.gender || '—'}
@@ -595,8 +549,8 @@ export default function DoctorDashboard() {
                                 patientId: patient.id,
                                 patientName: patient.fullName,
                                 contact: patient.contact,
-                                appointmentId: null,
-                              })}
+                                dateOfBirth: patient.dateOfBirth,
+                                appointmentId: null})}
                               className="text-xs px-3 py-1 rounded-md bg-green-50 text-green-700 hover:bg-green-100 font-medium transition-colors"
                             >
                               Consult
@@ -605,7 +559,7 @@ export default function DoctorDashboard() {
                               onClick={() => setHistoryPatient({
                                 patientId: patient.id,
                                 patientName: patient.fullName,
-                              })}
+                                dateOfBirth: patient.dateOfBirth})}
                               className="text-xs px-3 py-1 rounded-md bg-slate-100 text-slate-600 hover:bg-slate-200 font-medium transition-colors"
                             >
                               History
@@ -617,8 +571,7 @@ export default function DoctorDashboard() {
                                 contact: patient.contact,
                                 dateOfBirth: patient.dateOfBirth || '',
                                 gender: patient.gender || '',
-                                medicalHistory: patient.medicalHistory || '',
-                              })}
+                                medicalHistory: patient.medicalHistory || ''})}
                               className="text-xs px-3 py-1 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 font-medium transition-colors"
                             >
                               Edit

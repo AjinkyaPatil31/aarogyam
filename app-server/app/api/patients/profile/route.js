@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
 // GET — fetch own profile
 export async function GET(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
+    const { payload, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const user = await prisma.user.findUnique({
       where: { id: payload.id },
@@ -39,16 +34,8 @@ export async function GET(req) {
 // POST — complete own profile (first login)
 export async function POST(req) {
   try {
-    const authHeader = req.headers.get('authorization')
-                    ?? req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    const token = authHeader.split(' ')[1];
-    const payload = await verifyToken(token);
-    if (payload.role !== 'PATIENT') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['PATIENT']);
+    if (errorResponse) return errorResponse;
 
     const { fullName, dateOfBirth, gender, contact, newPassword, currentPassword } = await req.json();
 

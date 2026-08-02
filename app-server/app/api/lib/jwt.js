@@ -7,14 +7,22 @@ const getSecret = () => {
 };
 
 export async function signToken(payload) {
+  const idleMinutes = process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60';
   return await new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
-    .setExpirationTime(process.env.JWT_EXPIRES_IN ?? '8h')
+    .setExpirationTime(`${idleMinutes}m`)
     .sign(getSecret());
 }
 
 export async function verifyToken(token) {
-  const { payload } = await jwtVerify(token, getSecret());
-  return payload;
+  try {
+    const clockTolerance = parseInt(process.env.SESSION_CLOCK_SKEW_SECONDS || '30', 10);
+    const { payload } = await jwtVerify(token, getSecret(), {
+      clockTolerance
+    });
+    return payload;
+  } catch (err) {
+    return null;
+  }
 }

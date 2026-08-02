@@ -1,25 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/app/lib/prisma';
-import { verifyToken } from '@/app/api/lib/jwt';
+import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
-// Helper to extract and verify token
-async function getPayload(req) {
-  const authHeader = req.headers.get('authorization')
-                  ?? req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) return null;
-  const token = authHeader.split(' ')[1];
-  try { return await verifyToken(token); } 
-  catch { return null; }
-}
-
 export async function GET(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireAuth(req);
+    if (errorResponse) return errorResponse;
 
     const { searchParams } = new URL(req.url);
 
@@ -123,16 +111,9 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    if (payload.role !== 'PATIENT') {
-      return NextResponse.json(
-        { error: 'Only patients can book appointments' },
-        { status: 403 }
-      );
-    }
+    const { payload, errorResponse } = await requireRole(req, ['PATIENT']);
+    if (errorResponse) return errorResponse;
+
 
     const { doctorId, appointmentDate, timeSlot } = await req.json();
 
@@ -192,13 +173,9 @@ export async function POST(req) {
 
 export async function PATCH(req) {
   try {
-    const payload = await getPayload(req);
-    if (!payload) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
-    if (payload.role !== 'DOCTOR') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const { payload, errorResponse } = await requireRole(req, ['DOCTOR']);
+    if (errorResponse) return errorResponse;
+
 
     const { appointmentId, status } = await req.json();
     const validStatuses = ['Confirmed', 'Completed', 'Cancelled'];

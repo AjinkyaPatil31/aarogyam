@@ -13,9 +13,7 @@ export function getWhatsAppClient() {
     puppeteer: {
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    },
-  });
+      args: ['--no-sandbox', '--disable-setuid-sandbox']}});
 
   client.on('qr', (qr) => {
     console.log('\n📱 SCAN THIS QR CODE WITH WHATSAPP:\n');
