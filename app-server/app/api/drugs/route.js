@@ -12,11 +12,12 @@ export async function GET(request) {
       return NextResponse.json({ drugs: [] });
     }
 
+    // SQLite LIKE (used by Prisma's `contains`) is case-insensitive for ASCII,
+    // so this stays case-insensitive without the PostgreSQL-only `mode` filter.
     const drugs = await prisma.drug.findMany({
       where: {
         name: {
           contains: q,
-          mode: 'insensitive',
         },
       },
       orderBy: { name: 'asc' },

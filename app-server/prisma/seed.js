@@ -210,9 +210,10 @@ async function main() {
 
   console.log("Purging old listings and writing 10,000 guaranteed database rows...");
   await prisma.drug.deleteMany({});
+  // skipDuplicates is not supported on SQLite; it is redundant here anyway
+  // because drugDataArray is built from a Set (no duplicates by construction).
   await prisma.drug.createMany({
-    data: drugDataArray,
-    skipDuplicates: true
+    data: drugDataArray
   });
 
   console.log("Database successfully seeded with 10,000 clean records! Your entire 665 list is guaranteed active.");
