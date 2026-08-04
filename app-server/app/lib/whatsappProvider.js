@@ -9,7 +9,6 @@ const BASE_DIR = process.cwd();
 
 export async function sendWhatsAppMessage(phone, message) {
   const provider = process.env.WA_PROVIDER || 'webjs';
-  console.log('[WA] WA_PROVIDER resolved to:', JSON.stringify(provider));
 
   if (provider === 'twilio') {
     return await sendViaTwilio(phone, message);

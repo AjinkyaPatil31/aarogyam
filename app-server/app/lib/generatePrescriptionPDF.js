@@ -43,26 +43,6 @@ export function generatePrescriptionPDF(record, patientName, patientAge) {
     y += 10;
   }
 
-  function drawKeyValue(key, value, x, colWidth) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(100, 116, 139); // slate-500
-    doc.text(key, x, y);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(30, 41, 59); // slate-800
-    const lines = doc.splitTextToSize(String(value || '—'), colWidth - 2);
-    doc.text(lines, x, y + 4);
-    return lines.length * 4 + 2;
-  }
-
-  function drawDivider() {
-    checkPageBreak(5);
-    doc.setDrawColor(226, 232, 240); // slate-200
-    doc.setLineWidth(0.3);
-    doc.line(marginLeft, y, pageWidth - marginRight, y);
-    y += 4;
-  }
-
   // ══════════════════════════════════════════
   // SECTION 1 — Patient & Visit Info ribbon
   // ══════════════════════════════════════════

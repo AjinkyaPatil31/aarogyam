@@ -17,7 +17,6 @@ export async function POST(req) {
 
     try {
       await sendWhatsAppMessage(phone, message);
-      console.log(`📬 Message sent/queued for ${phone}`);
       return apiResponse({ success: true, queued: true });
     } catch (waError) {
       console.error('WhatsApp Provider error:', waError);

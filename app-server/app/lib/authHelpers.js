@@ -52,16 +52,3 @@ export async function requireRole(request, allowedRoles) {
   }
   return { payload };
 }
-
-/**
- * Restricts access to a specific target user ID, unless the user has an override role (e.g. DOCTOR).
- */
-export async function requireOwnershipOrRole(request, targetUserId, overrideRoles = ['DOCTOR', 'COMPOUNDER']) {
-  const { payload, errorResponse } = await requireAuth(request);
-  if (errorResponse) return { errorResponse };
-
-  if (payload.id !== targetUserId && !overrideRoles.includes(payload.role)) {
-    return { errorResponse: apiError('Forbidden: Access denied to this resource', 403) };
-  }
-  return { payload };
-}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 export default function DashboardHeader({ title, navItems, activeTab, onTabChange, userEmail, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
