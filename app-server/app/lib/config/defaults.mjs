@@ -81,12 +81,18 @@ export const DEFAULTS = Object.freeze({
   // configuration architecture. Do not read these from application code.
   future: {
     apiBaseUrl: '', // absolute API base for LAN clients
+    lanMode: {
+      enabled: false,
+    },
     lanDiscovery: {
       enabled: false,
       multicastAddress: '239.255.255.250',
       port: 4567,
     },
     offlineMode: {
+      enabled: false,
+    },
+    backup: {
       enabled: false,
     },
     sync: {
