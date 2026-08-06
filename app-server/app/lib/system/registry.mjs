@@ -38,6 +38,7 @@ import { getFlags } from '../local/flags.mjs';
 import { getLogManager } from '../logging/index.mjs';
 import { createStorageService } from '../storage/index.mjs';
 import { createBackupManager } from '../backup/index.mjs';
+import { createHealthManager } from '../health/index.mjs';
 import { createDiscoveryService } from '../discovery/index.mjs';
 import { createSyncService } from '../sync/index.mjs';
 import { LIFECYCLE_STATES, createLifecycle } from '../lifecycle/index.mjs';
@@ -210,16 +211,23 @@ export function createRegistry(options = {}) {
 
 /**
  * Register every infrastructure service in the canonical order.
+ * @param {object} [registry]  registry to populate (default: new)
+ * @param {object} [options]
+ * @param {string} [options.storageRoot]  storage engine root dir
+ *   (default: paths.dataDir). Overridable so verification suites can
+ *   sandbox every service behind a temporary root and never touch the
+ *   real data directory.
  * @returns {ReturnType<typeof createRegistry>} the populated registry
  */
-export function registerInfrastructureServices(registry = createRegistry()) {
+export function registerInfrastructureServices(registry = createRegistry(), options = {}) {
+  const storageRoot = options.storageRoot ?? paths.dataDir;
   registry
     .register('paths', () => paths)
     .register('fsutil', () => fsutil)
     .register('flags', () => getFlags())
     .register('logging', () => getLogManager())
     .register('storage', () =>
-      createStorageService(paths.dataDir, {
+      createStorageService(storageRoot, {
         cache: {
           enabled: get('storage.cache.enabled', true),
           maxEntries: get('storage.cache.maxEntries', 100),
@@ -236,6 +244,19 @@ export function registerInfrastructureServices(registry = createRegistry()) {
         return createBackupManager({ storage: storageSvc });
       },
       ['storage']
+    )
+    .register(
+      'health',
+      () => {
+        const instances = registry.instances();
+        return createHealthManager({
+          storage: instances.storage,
+          backup: instances.backup,
+          registry,
+          getLogManager: () => instances.logging,
+        });
+      },
+      ['storage', 'logging', 'backup']
     )
     .register('discovery', () => createDiscoveryService())
     .register('sync', () => createSyncService());

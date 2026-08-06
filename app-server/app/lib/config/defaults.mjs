@@ -122,6 +122,22 @@ export const DEFAULTS = Object.freeze({
     },
   },
 
+  // ── Health & diagnostics (Milestone 4.4) ──────────────────────────
+  // Consumed by app/lib/health. The framework is local-only (no
+  // telemetry). `reportDirectory` is resolved by the health manager
+  // (default data/diagnostics). Self-tests are read-only with respect
+  // to business data.
+  health: {
+    enabled: true,
+  },
+  diagnostics: {
+    enabled: true,
+    reportDirectory: '', // empty = data/diagnostics
+  },
+  selfTest: {
+    enabled: true,
+  },
+
   // ── Future milestones — STRUCTURE ONLY, NOT CONSUMED YET ──────────
   // Later milestones (LAN discovery, offline mode, installer, service
   // manager, backup) will wire these up without touching the

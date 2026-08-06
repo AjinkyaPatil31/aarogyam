@@ -248,7 +248,7 @@ await fsutil.removeRecursive(atomicSandbox);
 // ── 3. Registry lifecycle + graceful shutdown ──────────────────────
 const reg = createRegistry();
 registerInfrastructureServices(reg);
-check('registry: 8 services registered', reg.names().length === 8, reg.names().join(', '));
+check('registry: 9 services registered', reg.names().length === 9, reg.names().join(', '));
 check('registry: all services UNINITIALIZED before init',
   Object.values(reg.getStates()).every((s) => s === LIFECYCLE_STATES.UNINITIALIZED));
 reg.initializeAll();

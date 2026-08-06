@@ -125,6 +125,13 @@ export function createBootstrapManager(options = {}) {
         // 4. Infrastructure registry — initialize in dependency order.
         registry.initializeAll();
 
+        // 4b. Attach this bootstrap manager to the health framework so
+        //     the 'bootstrap' health provider can report live state.
+        const health = registry.instances().health;
+        if (health && typeof health.attachBootstrap === 'function') {
+          health.attachBootstrap(manager);
+        }
+
         lifecycle.transitionTo(LIFECYCLE_STATES.READY);
         log.info('Bootstrap ready');
         return manager.getStatus();

@@ -363,6 +363,49 @@ export const SCHEMA = [
     description: 'Interval between scheduled backups when enabled.',
   },
 
+  // ── Health & diagnostics (Milestone 4.4) ──────────────────────────
+  // Consumed by app/lib/health. Local-only — no telemetry, no cloud.
+  {
+    key: 'health.enabled',
+    env: 'HEALTH_ENABLED',
+    defaultKey: 'health.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'health',
+    status: 'optional',
+    description: 'Master switch for the health & diagnostics framework.',
+  },
+  {
+    key: 'diagnostics.enabled',
+    env: 'DIAGNOSTICS_ENABLED',
+    defaultKey: 'diagnostics.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'health',
+    status: 'optional',
+    description: 'Enable runtime diagnostics collection (app/lib/health).',
+  },
+  {
+    key: 'diagnostics.reportDirectory',
+    env: 'DIAGNOSTICS_REPORT_DIRECTORY',
+    defaultKey: 'diagnostics.reportDirectory',
+    required: false,
+    type: 'string',
+    category: 'health',
+    status: 'optional',
+    description: 'Directory for saved health reports (default data/diagnostics).',
+  },
+  {
+    key: 'selfTest.enabled',
+    env: 'SELF_TEST_ENABLED',
+    defaultKey: 'selfTest.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'health',
+    status: 'optional',
+    description: 'Enable executable self-tests (read-only, never business data).',
+  },
+
   // ── Future milestones — structure only ─────────────────────────────
   {
     key: 'future.apiBaseUrl',

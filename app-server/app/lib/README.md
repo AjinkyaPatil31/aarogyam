@@ -1,9 +1,10 @@
-# Aarogyam — Local Edition Infrastructure (Milestones 3.2 → 4.3)
+# Aarogyam — Local Edition Infrastructure (Milestones 3.2 → 4.4)
 
 This directory contains the **Local Infrastructure Foundation** (Milestone
 3.2), the **Installer & Runtime Bootstrap** layer (Milestone 3.3), the
 **Storage Engine** (Milestone 4.1), the **Logging Framework**
-(Milestone 4.2) and the **Backup Framework** (Milestone 4.3).
+(Milestone 4.2), the **Backup Framework** (Milestone 4.3) and the
+**Health & Diagnostics Framework** (Milestone 4.4).
 
 Nothing here runs automatically: no sockets open, no background processes
 begin, no filesystem changes occur on import, and no application behavior
@@ -23,6 +24,7 @@ the bootstrap manager) is explicitly invoked.
 | `logging/index.mjs` | **Logging framework** (M4.2) — TRACE→FATAL levels, buffered async pipeline, console + rotating file sinks, logger hierarchy, structured entries, lifecycle. |
 | `storage/index.mjs` | **Storage engine** (M4.1) — namespaced, versioned, checksummed JSON documents with atomic writes, transactions, LRU cache, concurrency locking and lifecycle. |
 | `backup/` | **Backup framework** (M4.3) — provider-based manager (`index.mjs`), restore engine (`restore.mjs`), integrity verification (`verify.mjs`), manifest format (`format.mjs`), gzip compression (`compression.mjs`), scheduling infrastructure (`schedule.mjs`), structured errors (`errors.mjs`). |
+| `health/` | **Health & Diagnostics framework** (M4.4) — health manager (`index.mjs`), 8 health providers (`providers.mjs`), diagnostics collection (`diagnostics.mjs`), self-tests (`selftest.mjs`), JSON + text reports (`report.mjs`), state model (`model.mjs`). |
 | `network/index.mjs` | Read-only network metadata helpers (no sockets). |
 | `discovery/index.mjs` | LAN discovery interfaces (broadcast, scan, clinic identity, device metadata — inert). |
 | `sync/index.mjs` | Offline sync interfaces (operation queue, engine, conflict resolver, version tracker — inert). |
@@ -46,15 +48,21 @@ backup/errors ◄── backup/format, backup/providers, backup/restore
 backup/format ◄── backup/verify, backup/restore, backup/index
 backup/providers ◄── backup/verify, backup/restore, backup/index
 backup/compression ◄── backup/index, backup/restore   (zero app imports — cycle-proof)
+health/model ◄── health/providers, health/diagnostics, health/selftest, health/report, health/index
+health/report ◄── health/index
+health/{providers,diagnostics,selftest} ◄── health/index   (aggregation point)
+config,lifecycle,installer,registry,logging,backup,storage ◄── health/index
 config,lifecycle,installer,registry,logging ◄── bootstrap   (top of graph)
-everything ◄── system/registry               (aggregation point)
+health ◄── system/registry               (registered service)
+everything ◄── system/registry           (aggregation point)
 ```
 
 No module imports anything that imports it back. The registry and the
 bootstrap manager are the two aggregation points at the top of the graph.
 The `backup/` modules form a strict chain (errors → format/compression →
-providers → verify → restore → index), so no backup module can ever be
-part of an import cycle.
+providers → verify → restore → index), and the `health/` modules form a
+star around `model.mjs` (providers/diagnostics/selftest/report → index),
+so neither subsystem can be part of an import cycle.
 
 ## Backup framework (Milestone 4.3)
 
@@ -193,6 +201,100 @@ backup/errors ◄── backup/*   (pure classes — leaf)
 backup/compression ◄── node only              (leaf)
 backup ◄── system/registry                    (registered service, depends on storage)
 backup ◄── scripts/verify-{infrastructure,m43} (verification only)
+```
+
+## Health & Diagnostics framework (Milestone 4.4)
+
+The single source of truth for infrastructure health, diagnostics,
+self-tests and operational reporting. Completely local — no telemetry,
+no cloud services, no internet dependencies. It assesses INFRASTRUCTURE
+state only: no patient, prescription, appointment, medical-record,
+authentication or secret data is ever read, logged or reported.
+
+### Health architecture
+
+The health manager (`health/index.mjs`) aggregates modular providers.
+Services register themselves — `register(provider)` (a provider needs a
+`name` + `check()`); default providers register on creation and are
+individually replaceable by re-registering under the same name.
+
+| Provider | Reports |
+| --- | --- |
+| `configuration` | configuration summary + validity (non-sensitive values only) |
+| `filesystem` | required directories exist + are writable |
+| `storage` | storage engine state + document count + cache stats |
+| `logging` | log manager state + written/dropped counts |
+| `backup` | backup manager state + registry count + last backup |
+| `bootstrap` | bootstrap manager status (UNKNOWN until attached) |
+| `registry` | service count + per-service lifecycle states |
+| `lifecycle` | health manager's own lifecycle state |
+
+### Health model (`health/model.mjs`)
+
+Standardized states with a strict severity order (worst wins during
+aggregation): `HEALTHY (0) < UNKNOWN (1) < WARNING (2) < DEGRADED (3)
+< FAILED (4)`. Every result carries `{ status, component, message,
+details, timestamp, duration, recommendations }` — validated by
+`isHealthResult()`. `collect()` returns `{ enabled, overall, results,
+collectedAt, duration }`; `worstState()` ranks a list.
+
+### Diagnostics (`health/diagnostics.mjs`)
+
+On-demand (`collectDiagnostics()`, gated by `diagnostics.enabled`):
+application version, installation id, platform/arch/hostname, node
+version, pid, uptime, memory usage, disk availability (OS + data
+directory via `statfs`), storage statistics, logging statistics, backup
+statistics (status + registry), registry state, lifecycle state and a
+non-sensitive configuration summary (app name, environment, URL — key
+counts per category, never secret values).
+
+### Self-tests (`health/selftest.mjs`)
+
+On-demand executable checks (gated by `selfTest.enabled`): `storage`
+(storage engine `verify()`), `backup` (verify the latest backup's
+integrity), `log-write` (isolated probe file in the logs directory),
+`configuration` (schema + validation), `filesystem` (directories
+present + writable), `registry` (service states). Self-tests NEVER
+modify business data — storage verification is read-only and the
+log-write probe writes only an infrastructure log file that is removed.
+
+### Report format (`health/report.mjs`)
+
+`generateReport({ includeSelfTests, save })` → `{ report, json, text,
+saved }`. The document carries `{ $schema: 'aarogyam-health-report',
+formatVersion, generatedAt, appVersion, overall, health, diagnostics,
+selfTests, recommendations, metadata }`. Formatters are an extensible
+registry (`REPORT_FORMATS = ['json', 'text']`); `save: true` writes
+`aarogyam-health-<timestamp>.json` + `.txt` under
+`diagnostics.reportDirectory` (default `data/diagnostics`).
+
+### Lifecycle & performance
+
+`initialize()` → READY (sync, no I/O); `shutdown()` → STOPPED — there
+is no background collection, so health can NEVER block shutdown. Default
+collection is lightweight (state reads + `stat` calls only); expensive
+work (writability probes, storage `verify()`, isolated log-write probes)
+runs exclusively on demand in self-tests/diagnostics. Cached values
+(application version, installation id) are reused across calls.
+
+### Configuration (all via `config.get()`)
+
+| Key | Env var | Default | Used by |
+| --- | --- | --- | --- |
+| `health.enabled` | `HEALTH_ENABLED` | `true` | `health` manager (master switch) |
+| `diagnostics.enabled` | `DIAGNOSTICS_ENABLED` | `true` | `health/diagnostics` |
+| `diagnostics.reportDirectory` | `DIAGNOSTICS_REPORT_DIRECTORY` | `data/diagnostics` | `health` manager |
+| `selfTest.enabled` | `SELFTEST_ENABLED` | `true` | `health/selftest` |
+
+### Dependencies
+
+```
+config, paths, fsutil, lifecycle, logging, installer, system ◄── health/index
+storage, backup, registry                     ◄── health (wired through the registry)
+health/model ◄── health/providers, diagnostics, selftest, report, index
+health ◄── system/registry                    (registered service)
+health ◄── bootstrap                          (attachBootstrap() wires the bootstrap provider)
+health ◄── scripts/verify-{infrastructure,m44} (verification only)
 ```
 
 ## Logging framework (Milestone 4.2)
@@ -427,6 +529,9 @@ can log during its own shutdown and the log manager flushes last.
 - Milestone 4.3 added `backup.*` (replacing the `future.backup.enabled`
   scaffolding — now `backup.schedule.enabled` — and moving
   `future.paths.backup` → `backup.directory`).
+- Milestone 4.4 added `health.enabled`, `diagnostics.enabled`,
+  `diagnostics.reportDirectory` and `selfTest.enabled` (consumed by the
+  health & diagnostics framework).
 
 ## Hard constraints honored
 
@@ -434,7 +539,8 @@ can log during its own shutdown and the log manager flushes last.
   logic, React component, dashboard, route, PDF, WhatsApp, appointment,
   prescription, RBAC or session code was modified.
 - No application code imports the new infrastructure modules yet (the
-  backup framework is invoked only through the infrastructure registry).
+  backup and health frameworks are invoked only through the
+  infrastructure registry).
 - No directories are created unless the installer/bootstrap is invoked
   (the backup manager writes only when a backup/restore explicitly runs).
 - No infrastructure module uses `console.*` directly — all logging
@@ -448,8 +554,10 @@ node scripts/verify-m33.mjs              # M3.3 installer/bootstrap verification
 node scripts/verify-m41.mjs              # M4.1 storage engine verification
 node scripts/verify-m42.mjs              # M4.2 logging framework verification
 node scripts/verify-m43.mjs              # M4.3 backup framework verification (incl. build gates)
+node scripts/verify-m44.mjs              # M4.4 health & diagnostics verification (incl. build gates)
 npm run build                            # app build must still pass
 ```
 
-`AAROGYAM_VERIFY_M43_FAST=1 node scripts/verify-m43.mjs` skips the slow
+`AAROGYAM_VERIFY_M43_FAST=1 node scripts/verify-m43.mjs` and
+`AAROGYAM_VERIFY_M44_FAST=1 node scripts/verify-m44.mjs` skip the slow
 build gates (npm install / prisma generate / npm build) while iterating.

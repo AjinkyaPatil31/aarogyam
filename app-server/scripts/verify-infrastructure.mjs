@@ -54,7 +54,7 @@ for (const [name, value] of Object.entries(flags)) {
 // ── 3. Service registry initializes without starting anything ───────
 const registry = createRegistry();
 registerInfrastructureServices(registry);
-check('registry has expected services', registry.names().length === 8, registry.names().join(', '));
+check('registry has expected services', registry.names().length === 9, registry.names().join(', '));
 registry.initializeAll();
 const initialized = registry.instances();
 check(
