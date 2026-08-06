@@ -101,9 +101,30 @@ export const DEFAULTS = Object.freeze({
     },
   },
 
+  // ── Backup framework (Milestone 4.3) ──────────────────────────────
+  // Consumed by app/lib/backup. `directory` is resolved by the path
+  // manager (default data/backups). Compression is optional and
+  // off by default. Retention prunes the oldest backups beyond
+  // maxBackups. Scheduled backups remain DISABLED — only manual
+  // execution is exposed today.
+  backup: {
+    enabled: true,
+    directory: '', // empty = data/backups (path manager default)
+    compression: {
+      enabled: false,
+    },
+    retention: {
+      maxBackups: 20,
+    },
+    schedule: {
+      enabled: false,
+      intervalSeconds: 86400, // daily default when enabled
+    },
+  },
+
   // ── Future milestones — STRUCTURE ONLY, NOT CONSUMED YET ──────────
   // Later milestones (LAN discovery, offline mode, installer, service
-  // manager, logging, backup) will wire these up without touching the
+  // manager, backup) will wire these up without touching the
   // configuration architecture. Do not read these from application code.
   future: {
     apiBaseUrl: '', // absolute API base for LAN clients
@@ -118,9 +139,6 @@ export const DEFAULTS = Object.freeze({
     offlineMode: {
       enabled: false,
     },
-    backup: {
-      enabled: false,
-    },
     sync: {
       enabled: false,
       intervalSeconds: 300,
@@ -128,7 +146,6 @@ export const DEFAULTS = Object.freeze({
     paths: {
       installation: '', // installer milestone
       database: '',     // database-location milestone (default: prisma/sqlite.db)
-      backup: '',       // backup milestone
       logs: '',         // logging milestone
     },
   },

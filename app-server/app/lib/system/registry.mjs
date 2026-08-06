@@ -226,7 +226,17 @@ export function registerInfrastructureServices(registry = createRegistry()) {
         },
       })
     )
-    .register('backup', () => createBackupManager())
+    .register(
+      'backup',
+      () => {
+        // The backup registry is persisted through the SAME storage
+        // instance the registry initialized (dependency below), so the
+        // cache stays consistent across services.
+        const storageSvc = registry.instances().storage;
+        return createBackupManager({ storage: storageSvc });
+      },
+      ['storage']
+    )
     .register('discovery', () => createDiscoveryService())
     .register('sync', () => createSyncService());
   return registry;

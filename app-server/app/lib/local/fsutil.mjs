@@ -106,6 +106,33 @@ export async function hashFile(file, algorithm = 'sha256') {
 }
 
 /**
+ * Recursively collect every regular file under `dir` (absolute paths,
+ * depth-first, deterministic sorted order). Missing directories yield
+ * an empty array. Deterministic ordering keeps backup manifests (and
+ * restore plans) stable across runs. Used by the backup framework to
+ * enumerate provider outputs for manifest entries.
+ */
+export async function walkFiles(dir) {
+  const out = [];
+  async function walk(current) {
+    let entries;
+    try {
+      entries = await fsp.readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const p = join(current, entry.name);
+      if (entry.isDirectory()) await walk(p);
+      else if (entry.isFile()) out.push(p);
+    }
+  }
+  await walk(dir);
+  return out;
+}
+
+/**
  * Crash-safe write: write to a temp file in the same directory, then
  * rename over the target. Guarantees the destination is never observed
  * half-written.

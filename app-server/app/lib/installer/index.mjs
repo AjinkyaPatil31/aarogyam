@@ -86,8 +86,12 @@ export function defaultRequiredDirectories() {
   ];
 }
 
-/** App version — single source is package.json (not duplicated in config). */
-async function readAppVersion() {
+/**
+ * App version — single source is package.json (not duplicated in config).
+ * Exported (Milestone 4.3) so the backup framework records the same
+ * version without duplicating the read logic.
+ */
+export async function readAppVersion() {
   const pkg = await fsutil.readJson(resolvePath('package.json'), null);
   return pkg && typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
 }

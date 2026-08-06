@@ -299,6 +299,70 @@ export const SCHEMA = [
     description: 'Maximum cached documents before LRU eviction in app/lib/storage.',
   },
 
+  // ── Backup framework (Milestone 4.3) ──────────────────────────────
+  // Consumed by app/lib/backup. All values flow exclusively through
+  // config.get() — no process.env access outside the config system.
+  {
+    key: 'backup.enabled',
+    env: 'BACKUP_ENABLED',
+    defaultKey: 'backup.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'backup',
+    status: 'optional',
+    description: 'Master switch for the backup framework — manual backups are refused when false.',
+  },
+  {
+    key: 'backup.directory',
+    env: 'BACKUP_DIRECTORY',
+    defaultKey: 'backup.directory',
+    required: false,
+    type: 'string',
+    category: 'backup',
+    status: 'optional',
+    description: 'Backup root directory — resolved by app/lib/local/paths (default data/backups).',
+  },
+  {
+    key: 'backup.compression.enabled',
+    env: 'BACKUP_COMPRESSION_ENABLED',
+    defaultKey: 'backup.compression.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'backup',
+    status: 'optional',
+    description: 'Compress backup payloads with gzip (backup manager API is independent of this).',
+  },
+  {
+    key: 'backup.retention.maxBackups',
+    env: 'BACKUP_RETENTION_MAX_BACKUPS',
+    defaultKey: 'backup.retention.maxBackups',
+    required: false,
+    type: 'number',
+    category: 'backup',
+    status: 'optional',
+    description: 'Maximum retained backups — the oldest are pruned beyond this.',
+  },
+  {
+    key: 'backup.schedule.enabled',
+    env: 'BACKUP_SCHEDULE_ENABLED',
+    defaultKey: 'backup.schedule.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'backup',
+    status: 'optional',
+    description: 'Enable scheduled backups (infrastructure exists, remains disabled — manual only).',
+  },
+  {
+    key: 'backup.schedule.intervalSeconds',
+    env: 'BACKUP_SCHEDULE_INTERVAL_SECONDS',
+    defaultKey: 'backup.schedule.intervalSeconds',
+    required: false,
+    type: 'number',
+    category: 'backup',
+    status: 'optional',
+    description: 'Interval between scheduled backups when enabled.',
+  },
+
   // ── Future milestones — structure only ─────────────────────────────
   {
     key: 'future.apiBaseUrl',
@@ -361,16 +425,6 @@ export const SCHEMA = [
     description: 'Enable offline mode (offline milestone). Consumed by app/lib/local/flags.',
   },
   {
-    key: 'future.backup.enabled',
-    env: 'AUTOMATIC_BACKUPS_ENABLED',
-    defaultKey: 'future.backup.enabled',
-    required: false,
-    type: 'boolean',
-    category: 'future',
-    status: 'future',
-    description: 'Enable automatic backups (backup milestone). Consumed by app/lib/local/flags.',
-  },
-  {
     key: 'future.sync.enabled',
     env: 'SYNC_ENABLED',
     defaultKey: 'future.sync.enabled',
@@ -411,16 +465,6 @@ export const SCHEMA = [
     description: 'SQLite database file location (database milestone).',
   },
   {
-    key: 'future.paths.backup',
-    env: 'BACKUP_DIRECTORY',
-    defaultKey: 'future.paths.backup',
-    required: false,
-    type: 'string',
-    category: 'future',
-    status: 'future',
-    description: 'Backup directory (backup milestone).',
-  },
-  {
     key: 'future.paths.logs',
     env: 'LOG_DIRECTORY',
     defaultKey: 'future.paths.logs',
@@ -457,5 +501,19 @@ export const LEGACY = [
     removedIn: '4.2',
     reason:
       'Replaced by LOG_FILE_ENABLED (logging.file.enabled) when the logging framework was completed in Milestone 4.2.',
+  },
+  {
+    env: 'future.backup.enabled',
+    status: 'dead',
+    removedIn: '4.3',
+    reason:
+      'Config key replaced by backup.schedule.enabled when the backup framework was completed in Milestone 4.3 (env var renamed AUTOMATIC_BACKUPS_ENABLED → BACKUP_SCHEDULE_ENABLED).',
+  },
+  {
+    env: 'future.paths.backup',
+    status: 'dead',
+    removedIn: '4.3',
+    reason:
+      'Config key moved to backup.directory in Milestone 4.3; the BACKUP_DIRECTORY environment variable remains in use by backup.directory.',
   },
 ];

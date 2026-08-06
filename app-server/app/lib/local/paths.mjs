@@ -60,7 +60,7 @@ const databaseFile = resolve(
 const dataDir = resolve(join(installationDir, 'data'));
 
 const logsDir = resolve(effective(get('future.paths.logs', ''), join(dataDir, 'logs')));
-const backupsDir = resolve(effective(get('future.paths.backup', ''), join(dataDir, 'backups')));
+const backupsDir = resolve(effective(get('backup.directory', ''), join(dataDir, 'backups')));
 const exportDir = join(dataDir, 'exports');
 const tempDir = join(tmpdir(), 'aarogyam');
 

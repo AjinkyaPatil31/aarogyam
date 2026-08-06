@@ -1,9 +1,9 @@
-# Aarogyam — Local Edition Infrastructure (Milestones 3.2 → 4.2)
+# Aarogyam — Local Edition Infrastructure (Milestones 3.2 → 4.3)
 
 This directory contains the **Local Infrastructure Foundation** (Milestone
 3.2), the **Installer & Runtime Bootstrap** layer (Milestone 3.3), the
-**Storage Engine** (Milestone 4.1) and the **Logging Framework**
-(Milestone 4.2).
+**Storage Engine** (Milestone 4.1), the **Logging Framework**
+(Milestone 4.2) and the **Backup Framework** (Milestone 4.3).
 
 Nothing here runs automatically: no sockets open, no background processes
 begin, no filesystem changes occur on import, and no application behavior
@@ -22,7 +22,7 @@ the bootstrap manager) is explicitly invoked.
 | `lifecycle/index.mjs` | **Lifecycle interfaces** (M3.3) — six states + transition rules used by the registry and bootstrap. |
 | `logging/index.mjs` | **Logging framework** (M4.2) — TRACE→FATAL levels, buffered async pipeline, console + rotating file sinks, logger hierarchy, structured entries, lifecycle. |
 | `storage/index.mjs` | **Storage engine** (M4.1) — namespaced, versioned, checksummed JSON documents with atomic writes, transactions, LRU cache, concurrency locking and lifecycle. |
-| `backup/index.mjs` | Backup framework (SQLite / settings / exports providers — interfaces only). |
+| `backup/` | **Backup framework** (M4.3) — provider-based manager (`index.mjs`), restore engine (`restore.mjs`), integrity verification (`verify.mjs`), manifest format (`format.mjs`), gzip compression (`compression.mjs`), scheduling infrastructure (`schedule.mjs`), structured errors (`errors.mjs`). |
 | `network/index.mjs` | Read-only network metadata helpers (no sockets). |
 | `discovery/index.mjs` | LAN discovery interfaces (broadcast, scan, clinic identity, device metadata — inert). |
 | `sync/index.mjs` | Offline sync interfaces (operation queue, engine, conflict resolver, version tracker — inert). |
@@ -39,14 +39,161 @@ config  ◄── local/flags, local/paths, discovery, logging, installer, boots
 paths,fsutil ◄── storage, backup
 errors  ◄── backup, discovery, sync
 lifecycle ◄── system/registry, bootstrap     (lifecycle imports nothing)
-system  ◄── installer                        (system re-exports from network)
-installer ◄── bootstrap
+system  ◄── installer, backup                (system re-exports from network)
+installer ◄── bootstrap, backup               (readAppVersion / METADATA_SCHEMA_VERSION)
+storage ◄── backup                           (registry metadata + cache invalidation)
+backup/errors ◄── backup/format, backup/providers, backup/restore
+backup/format ◄── backup/verify, backup/restore, backup/index
+backup/providers ◄── backup/verify, backup/restore, backup/index
+backup/compression ◄── backup/index, backup/restore   (zero app imports — cycle-proof)
 config,lifecycle,installer,registry,logging ◄── bootstrap   (top of graph)
 everything ◄── system/registry               (aggregation point)
 ```
 
 No module imports anything that imports it back. The registry and the
 bootstrap manager are the two aggregation points at the top of the graph.
+The `backup/` modules form a strict chain (errors → format/compression →
+providers → verify → restore → index), so no backup module can ever be
+part of an import cycle.
+
+## Backup framework (Milestone 4.3)
+
+Production-grade, completely local protection for ALL application data.
+Business logic is untouched — the framework only ever reads and copies
+files.
+
+### Provider architecture
+
+Each provider is an independently replaceable unit that knows ONE thing:
+where its data lives and how to copy it in/out of a backup. Providers
+never compress or checksum — the manager owns those concerns, so the
+manager API is independent of the compression implementation.
+
+| Provider | Protects | Source |
+| --- | --- | --- |
+| `sqlite` | application database | `prisma/sqlite.db` (required — a backup without the database fails loudly) |
+| `storage` | infrastructure storage engine documents | storage root `cache` / `metadata` / `installation` / `runtime` namespaces |
+| `settings` | application settings | storage root `settings` namespace |
+| `exports` | generated export data | `data/exports` tree |
+
+The storage `backup` namespace (the backup registry) is deliberately
+NOT backed up — it is an index of backups, not protected data, and it is
+rebuilt from restored manifests.
+
+### Directory layout
+
+```
+<backup.directory>/            (default data/backups)
+  <id>/                        e.g. 20260807T103000Z-3f2a9b1c
+    manifest.json
+    sqlite/aarogyam.sqlite[.gz]
+    settings/<doc>.json[.gz]
+    storage/<ns>/<doc>.json[.gz]
+    exports/<tree>[.gz]
+```
+
+### Backup lifecycle
+
+`initialize()` (sync, no I/O) → READY. `backup({ trigger: 'manual' })`:
+
+1. guards — enabled? initialized? not busy? (structured errors only)
+2. create `<backup.directory>/<id>/`
+3. for each provider: capture into its staging subdirectory
+4. finalize each file — compress (when enabled) + SHA-256 checksum
+5. write `manifest.json` atomically (self-checksummed)
+6. persist the registry index through the Storage Engine (`backup`
+   namespace — an index only, the manifest stays the source of truth)
+7. apply retention (`backup.retention.maxBackups`, oldest pruned)
+8. report progress via the optional `onProgress` callback + `status()`
+
+`cancel()` cooperatively aborts a running backup (checked between
+provider stages); the partial directory is removed. `shutdown()`
+cancels any running backup, waits (bounded by `SHUTDOWN_GRACE_MS`) and
+stops the scheduler. Only manual execution is exposed — the scheduler
+(`backup/schedule.mjs`) exists but stays disabled
+(`backup.schedule.enabled=false`) and is never started by the manager.
+
+### Restore lifecycle
+
+`restore({ id, providers, dryRun })`:
+
+1. load the manifest + verify integrity (checksums, missing files,
+   manifest checksum) and compatibility (format + schema version) —
+   all BEFORE any application state changes
+2. `dryRun` → compute and return the exact action plan, write nothing
+3. apply — for every file: re-verify the stored SHA-256, move any
+   existing target aside (never delete), copy the (decompressed) bytes
+   in
+4. on ANY failure → roll back: remove newly-written files, restore the
+   moved-aside originals, raise a structured `RestoreError` with
+   `rolledBack: true`
+5. on success → drop the aside artifacts and invalidate the storage
+   engine cache so reads observe restored documents
+
+`validate(id)` returns the integrity + compatibility report without
+restoring; `verify(id)` returns structured integrity diagnostics.
+
+### Manifest format (`backup/format.mjs`)
+
+Versioned (`formatVersion`, currently 1) and self-checksummed — the
+`checksum` field is the SHA-256 of the canonical serialization without
+itself. Every file entry carries `{ path, size, sha256, compressed,
+algorithm }`; `size`/`sha256` describe the file exactly as stored
+(compressed bytes when compression is enabled).
+
+```json
+{
+  "$schema": "aarogyam-backup-manifest",
+  "formatVersion": 1,
+  "id": "20260807T103000Z-3f2a9b1c",
+  "createdAt": "2026-08-07T10:30:00.000Z",
+  "appVersion": "0.1.0",
+  "schemaVersion": "1",
+  "trigger": "manual",
+  "compression": { "enabled": false, "algorithm": null },
+  "metadata": { "platform": "win32", "arch": "x64", "hostname": "..." },
+  "providers": { "sqlite": { "status": "ok", "files": [], "output": {} }, ... },
+  "checksum": "..."
+}
+```
+
+### Integrity verification (`backup/verify.mjs`)
+
+`verifyBackup()` reports structured diagnostics — never throws for a
+degraded backup: `manifest-present`, `manifest-valid`, `format-version`,
+`manifest-checksum`, `metadata-complete`, per-provider status,
+`files-present` (missing-file detection) and `file-checksums`.
+
+### Concurrency
+
+One backup at a time; no restore while a backup runs; no concurrent
+restores — all enforced with structured `BackupError('busy')`.
+
+### Configuration (all via `config.get()`)
+
+| Key | Env var | Default | Used by |
+| --- | --- | --- | --- |
+| `backup.enabled` | `BACKUP_ENABLED` | `true` | `backup` manager (master switch) |
+| `backup.directory` | `BACKUP_DIRECTORY` | `data/backups` | `local/paths`, `backup` |
+| `backup.compression.enabled` | `BACKUP_COMPRESSION_ENABLED` | `false` | `backup` manager |
+| `backup.retention.maxBackups` | `BACKUP_RETENTION_MAX_BACKUPS` | `20` | `backup` manager |
+| `backup.schedule.enabled` | `BACKUP_SCHEDULE_ENABLED` | `false` | `backup/schedule` |
+| `backup.schedule.intervalSeconds` | `BACKUP_SCHEDULE_INTERVAL_SECONDS` | `86400` | `backup/schedule` |
+
+Milestone 4.3 moved `future.backup.enabled` → `backup.schedule.enabled`
+(flag `automaticBackups` follows) and `future.paths.backup` →
+`backup.directory`; the old keys are recorded in `config/schema.mjs`
+`LEGACY`.
+
+### Dependencies
+
+```
+config, paths, fsutil, lifecycle, logging, storage, installer, system ◄── backup/index
+backup/errors ◄── backup/*   (pure classes — leaf)
+backup/compression ◄── node only              (leaf)
+backup ◄── system/registry                    (registered service, depends on storage)
+backup ◄── scripts/verify-{infrastructure,m43} (verification only)
+```
 
 ## Logging framework (Milestone 4.2)
 
@@ -222,7 +369,6 @@ duplicated into config either).
 | Key | Env var | Used by |
 | --- | --- | --- |
 | `future.lanMode.enabled` | `LAN_MODE_ENABLED` | `local/flags` |
-| `future.backup.enabled` | `AUTOMATIC_BACKUPS_ENABLED` | `local/flags` |
 
 Existing `future.*` keys reused by the infrastructure:
 
@@ -230,7 +376,7 @@ Existing `future.*` keys reused by the infrastructure:
 | --- | --- |
 | `future.paths.installation` | `local/paths` |
 | `future.paths.database` | `local/paths` |
-| `future.paths.backup` | `local/paths`, `backup` |
+| `future.paths.backup` | `local/paths`, `backup` (Milestone 4.3: key moved to `backup.directory` — see below) |
 | `future.paths.logs` | `local/paths`, `logging` |
 | `future.lanDiscovery.*` | `local/flags`, `discovery` |
 | `future.offlineMode.enabled` | `local/flags` |
@@ -278,14 +424,19 @@ can log during its own shutdown and the log manager flushes last.
 - Milestone 4.2 added `logging.*` (replacing the `future.logging.*`
   scaffolding) and promoted the `loggingToFile` flag to
   `logging.file.enabled`.
+- Milestone 4.3 added `backup.*` (replacing the `future.backup.enabled`
+  scaffolding — now `backup.schedule.enabled` — and moving
+  `future.paths.backup` → `backup.directory`).
 
 ## Hard constraints honored
 
 - No authentication, middleware, Prisma, database schema, business
   logic, React component, dashboard, route, PDF, WhatsApp, appointment,
   prescription, RBAC or session code was modified.
-- No application code imports the new infrastructure modules yet.
-- No directories are created unless the installer/bootstrap is invoked.
+- No application code imports the new infrastructure modules yet (the
+  backup framework is invoked only through the infrastructure registry).
+- No directories are created unless the installer/bootstrap is invoked
+  (the backup manager writes only when a backup/restore explicitly runs).
 - No infrastructure module uses `console.*` directly — all logging
   flows through the logging framework.
 
@@ -296,5 +447,9 @@ node scripts/verify-infrastructure.mjs   # M3.2 static + load verification
 node scripts/verify-m33.mjs              # M3.3 installer/bootstrap verification
 node scripts/verify-m41.mjs              # M4.1 storage engine verification
 node scripts/verify-m42.mjs              # M4.2 logging framework verification
+node scripts/verify-m43.mjs              # M4.3 backup framework verification (incl. build gates)
 npm run build                            # app build must still pass
 ```
+
+`AAROGYAM_VERIFY_M43_FAST=1 node scripts/verify-m43.mjs` skips the slow
+build gates (npm install / prisma generate / npm build) while iterating.

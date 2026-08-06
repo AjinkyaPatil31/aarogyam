@@ -7,8 +7,9 @@
  *    1. all modules import cleanly (no circular-import failures)
  *    2. feature flags all default to disabled
  *    3. the service registry initializes without starting anything
- *    4. discovery / sync / backup interfaces are inert (throw
- *       NotImplementedError when invoked)
+ *    4. discovery / sync interfaces are inert (throw NotImplementedError
+ *       when invoked); the backup manager is functional but gated on
+ *       initialize() (a structured error, no I/O, before that)
  *    5. no sockets / background processes / filesystem changes occur
  *       automatically (no network handles, no child processes, no new
  *       directories created by merely importing the modules)
@@ -22,7 +23,8 @@ import { getFlags, isEnabled, FLAG_DEFINITIONS } from '../app/lib/local/flags.mj
 import { paths, resolvePath, resolveDataPath } from '../app/lib/local/paths.mjs';
 import { createDiscoveryService, createBroadcaster, createDiscoveryScanner, createClinicIdentity, createDeviceMetadata } from '../app/lib/discovery/index.mjs';
 import { createSyncService, createOperationQueue, createSyncEngine, createConflictResolver, createVersionTracker } from '../app/lib/sync/index.mjs';
-import { createBackupManager, createSqliteBackupProvider, createSettingsBackupProvider, createExportProvider, BACKUP_TYPES } from '../app/lib/backup/index.mjs';
+import { createBackupManager, createSqliteBackupProvider, createStorageBackupProvider, createSettingsBackupProvider, createExportProvider, BACKUP_TYPES } from '../app/lib/backup/index.mjs';
+import { BackupError } from '../app/lib/backup/errors.mjs';
 import { NotImplementedError, ServiceNotInitializedError, PathViolationError } from '../app/lib/local/errors.mjs';
 import * as fsutil from '../app/lib/local/fsutil.mjs';
 import { createStorageService, NAMESPACES } from '../app/lib/storage/index.mjs';
@@ -88,15 +90,22 @@ try {
 }
 check('sync engine inert (NotImplementedError)', threw);
 
+// The backup framework is functional since Milestone 4.3, but using it
+// before initialize() must raise a STRUCTURED error with no side
+// effects (no directories created, nothing written).
 const backup = createBackupManager();
-threw = false;
+let backupErr = null;
 try {
-  await backup.runAll();
+  await backup.backup({ trigger: 'manual' });
 } catch (err) {
-  threw = err instanceof NotImplementedError;
+  backupErr = err;
 }
-check('backup runAll() inert (NotImplementedError)', threw);
-check('backup manager registers 3 providers', backup.list().length === 3, backup.list().map((p) => p.type).join(', '));
+check(
+  'backup manager requires initialize() (structured error)',
+  backupErr instanceof BackupError && backupErr.code === 'not-initialized',
+  backupErr?.message ?? 'no error'
+);
+check('backup manager registers 4 providers', backup.list().length === 4, backup.list().map((p) => p.type).join(', '));
 
 // ── 5. No automatic side effects from import ────────────────────────
 // 5a. No child processes / sockets created by this script itself.
@@ -183,9 +192,10 @@ check('createSyncEngine() loads', typeof createSyncEngine().sync === 'function')
 check('createConflictResolver() loads', typeof createConflictResolver().resolve === 'function');
 check('createVersionTracker() loads', typeof createVersionTracker().current === 'function');
 check('createSqliteBackupProvider() loads', createSqliteBackupProvider().type === 'sqlite');
+check('createStorageBackupProvider() loads', createStorageBackupProvider().type === 'storage');
 check('createSettingsBackupProvider() loads', createSettingsBackupProvider().type === 'settings');
 check('createExportProvider() loads', createExportProvider().type === 'exports');
-check('BACKUP_TYPES exposed', BACKUP_TYPES.length === 3);
+check('BACKUP_TYPES exposed', BACKUP_TYPES.length === 4, BACKUP_TYPES.join(', '));
 check('NAMESPACES exposed', NAMESPACES.length === 6, NAMESPACES.join(', '));
 check('LOG_LEVELS exposed', LOG_LEVELS.debug < LOG_LEVELS.error);
 check('error types load', NotImplementedError.name === 'NotImplementedError' && ServiceNotInitializedError.name === 'ServiceNotInitializedError' && PathViolationError.name === 'PathViolationError');
