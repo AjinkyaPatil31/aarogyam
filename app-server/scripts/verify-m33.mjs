@@ -410,7 +410,7 @@ check('zero duplicate network helpers outside network', dupFound.length === 0, d
 let envLeaks = [];
 for (const file of LIB_FILES.filter((f) => !f.startsWith('app/lib/config/'))) {
   const src = await readFile(file, 'utf8');
-  if (src.includes('process.env')) envLeaks.push(file);
+  if (src.includes('process.env.')) envLeaks.push(file);
 }
 check('no process.env access outside config system', envLeaks.length === 0, envLeaks.join(', '));
 

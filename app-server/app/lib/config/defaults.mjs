@@ -75,6 +75,17 @@ export const DEFAULTS = Object.freeze({
     },
   },
 
+  // ── Storage engine (Milestone 4.1) ────────────────────────────────
+  // In-memory read/write-through cache for the document storage engine.
+  // Enabled by default for the shared instance; disable via
+  // STORAGE_CACHE_ENABLED=false. Cache is write-through (crash-safe).
+  storage: {
+    cache: {
+      enabled: true,
+      maxEntries: 100,
+    },
+  },
+
   // ── Future milestones — STRUCTURE ONLY, NOT CONSUMED YET ──────────
   // Later milestones (LAN discovery, offline mode, installer, service
   // manager, logging, backup) will wire these up without touching the

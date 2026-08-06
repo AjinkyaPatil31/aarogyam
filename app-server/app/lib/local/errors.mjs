@@ -50,3 +50,20 @@ export class PathViolationError extends Error {
     this.code = 'AAROGYAM_PATH_VIOLATION';
   }
 }
+
+/**
+ * Structured error raised by the storage engine (Milestone 4.1) when a
+ * document fails integrity validation or an operation cannot complete.
+ * Carries a machine-readable `code` (e.g. 'invalid-json',
+ * 'checksum-mismatch', 'unsupported-version', 'missing-document',
+ * 'transaction-failed') plus `ns` / `key` context when available.
+ */
+export class StorageError extends Error {
+  constructor(code, message, { ns = null, key = null } = {}) {
+    super(`[Aarogyam] Storage error (${code}): ${message}`);
+    this.name = 'StorageError';
+    this.code = code;
+    this.ns = ns;
+    this.key = key;
+  }
+}

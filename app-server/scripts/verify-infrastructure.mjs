@@ -186,7 +186,7 @@ check('createSqliteBackupProvider() loads', createSqliteBackupProvider().type ==
 check('createSettingsBackupProvider() loads', createSettingsBackupProvider().type === 'settings');
 check('createExportProvider() loads', createExportProvider().type === 'exports');
 check('BACKUP_TYPES exposed', BACKUP_TYPES.length === 3);
-check('NAMESPACES exposed', NAMESPACES.length === 5);
+check('NAMESPACES exposed', NAMESPACES.length === 6, NAMESPACES.join(', '));
 check('LOG_LEVELS exposed', LOG_LEVELS.debug < LOG_LEVELS.error);
 check('error types load', NotImplementedError.name === 'NotImplementedError' && ServiceNotInitializedError.name === 'ServiceNotInitializedError' && PathViolationError.name === 'PathViolationError');
 check('flags API loadable', typeof isEnabled === 'function' && Object.keys(FLAG_DEFINITIONS).length === 6);

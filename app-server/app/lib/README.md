@@ -19,7 +19,7 @@ the bootstrap manager) is explicitly invoked.
 | `local/flags.mjs` | Centralized feature flags — all **disabled by default**. |
 | `lifecycle/index.mjs` | **Lifecycle interfaces** (M3.3) — six states + transition rules used by the registry and bootstrap. |
 | `logging/index.mjs` | Logging framework (info/warn/error/debug, console now, file later). |
-| `storage/index.mjs` | Local storage abstraction (settings, cache, metadata, installation, backups). |
+| `storage/index.mjs` | **Storage engine** (M4.1) — namespaced, versioned, checksummed JSON documents with atomic writes, transactions, LRU cache, concurrency locking and lifecycle. |
 | `backup/index.mjs` | Backup framework (SQLite / settings / exports providers — interfaces only). |
 | `network/index.mjs` | Read-only network metadata helpers (no sockets). |
 | `discovery/index.mjs` | LAN discovery interfaces (broadcast, scan, clinic identity, device metadata — inert). |
@@ -45,6 +45,51 @@ everything ◄── system/registry               (aggregation point)
 
 No module imports anything that imports it back. The registry and the
 bootstrap manager are the two aggregation points at the top of the graph.
+
+## Storage engine (Milestone 4.1)
+
+Infrastructure-data document storage. Business entities **never** use it
+(SQLite via Prisma remains the application database).
+
+- **Namespace layout** — `settings`, `cache`, `metadata`, `installation`,
+  `runtime`, `backup`; each namespace is an isolated directory of
+  `<safeKey>.json` documents.
+- **Document envelope** — `{ $schema, version, namespace, key, savedAt,
+  checksum, data }`; `version` is reserved for future compatibility (no
+  migrations yet), `checksum` is SHA-256 over the serialized data.
+  Legacy raw-JSON documents are read as version 0.
+- **Atomic persistence** — every single-document write is temp-file +
+  atomic rename (crash-safe, never partially written).
+- **Transaction flow** — `begin()` holds the write mutex; `tx.set()` /
+  `tx.remove()` stage operations (set temps written immediately);
+  `commit()` moves existing targets aside to backups, renames new
+  documents into place, then drops backups; any mid-commit failure
+  restores the backups (no partial commits). `rollback()` discards the
+  staged temps. `transaction(fn)` auto-commits / auto-rolls-back.
+- **Transaction restrictions** — inside a transaction use only
+  `tx.set()`/`tx.remove()`; a service-level `set()`/`remove()` there
+  raises `StorageError('transaction-in-progress')` instead of
+  deadlocking. An abandoned transaction is logged as stale after
+  `TX_STALE_MS` so a future service manager can recover.
+- **Crash-atomicity honesty** — multi-document transactions are
+  exception-safe (in-process failures roll back via backups) but not
+  crash-atomic: a hard kill between commit phase 1 (targets → `.bak`)
+  and phase 3 (backups dropped) can leave orphaned `.bak` artifacts.
+  `listKeys` ignores non-`.json` files, so nothing corrupt is served;
+  the future journaling milestone closes this window.
+- **Concurrency** — a FIFO write mutex serializes all mutations; reads
+  are lock-free (renames are atomic). Safe for concurrent services.
+- **Cache behavior** — optional in-memory LRU, read-through +
+  write-through (crash-safe), with `invalidate()` / `invalidateNamespace()`
+  / `clear()` and `getStats()` (`hits`, `misses`, `evictions`, `entries`).
+  The shared instance reads `storage.cache.*` from config.
+- **Integrity verification** — `verify()` / `verifyDocument()` validate
+  JSON format, envelope version, namespace/key markers and checksums;
+  `getStrict()` / `readDocument()` raise structured `StorageError`s;
+  `get()` is lenient (returns the fallback and logs on corruption).
+- **Lifecycle** — `initialize()` → READY (sync, no I/O); `shutdown()`
+  drains pending writes, flushes (write-through ⇒ disk already current)
+  and → STOPPED.
 
 ## Lifecycle (Milestone 3.3)
 
@@ -143,6 +188,21 @@ Existing `future.*` keys reused by the infrastructure:
 | `future.logging.toFile` | `local/flags` |
 | `future.lanDiscovery.*` | `local/flags`, `discovery` |
 | `future.offlineMode.enabled` | `local/flags` |
+
+`storage.*` keys added in Milestone 4.1 (consumed by the storage engine):
+
+| Key | Env var | Used by |
+| --- | --- | --- |
+| `storage.cache.enabled` | `STORAGE_CACHE_ENABLED` | `storage` |
+| `storage.cache.maxEntries` | `STORAGE_CACHE_MAX_ENTRIES` | `storage` |
+
+## Storage dependency graph
+
+```
+config, paths, fsutil, errors, lifecycle, logging ◄── storage   (no cycles)
+storage ◄── system/registry                                    (registered service)
+storage ◄── scripts/verify-{infrastructure,m33,m41}            (verification only)
+```
 | `future.sync.enabled` | `local/flags` |
 | `future.apiBaseUrl` | future milestones |
 

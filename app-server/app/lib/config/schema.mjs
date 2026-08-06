@@ -224,6 +224,28 @@ export const SCHEMA = [
     description: 'Headless mode for the local WhatsApp client (scripts/wa-init.mjs).',
   },
 
+  // ── Storage engine (Milestone 4.1) ────────────────────────────────
+  {
+    key: 'storage.cache.enabled',
+    env: 'STORAGE_CACHE_ENABLED',
+    defaultKey: 'storage.cache.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'storage',
+    status: 'optional',
+    description: 'Enable the in-memory read/write-through cache in app/lib/storage.',
+  },
+  {
+    key: 'storage.cache.maxEntries',
+    env: 'STORAGE_CACHE_MAX_ENTRIES',
+    defaultKey: 'storage.cache.maxEntries',
+    required: false,
+    type: 'number',
+    category: 'storage',
+    status: 'optional',
+    description: 'Maximum cached documents before LRU eviction in app/lib/storage.',
+  },
+
   // ── Future milestones — structure only ─────────────────────────────
   {
     key: 'future.apiBaseUrl',

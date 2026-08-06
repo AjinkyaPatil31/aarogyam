@@ -41,6 +41,7 @@ import { createBackupManager } from '../backup/index.mjs';
 import { createDiscoveryService } from '../discovery/index.mjs';
 import { createSyncService } from '../sync/index.mjs';
 import { LIFECYCLE_STATES, createLifecycle } from '../lifecycle/index.mjs';
+import { get } from '../config/index.mjs';
 
 /**
  * Create an empty service registry.
@@ -123,6 +124,11 @@ export function createRegistry(options = {}) {
           if (!instances.has(dep) && services.has(dep)) registry.initialize(dep);
         }
         const instance = svc.factory();
+        // Lifecycle hook — services exposing a synchronous initialize()
+        // are brought to READY as part of registry initialization.
+        if (instance && typeof instance.initialize === 'function') {
+          instance.initialize();
+        }
         instances.set(name, instance);
         if (!initOrder.includes(name)) initOrder.push(name);
         lifecycle.transitionTo(LIFECYCLE_STATES.READY);
@@ -212,7 +218,14 @@ export function registerInfrastructureServices(registry = createRegistry()) {
     .register('fsutil', () => fsutil)
     .register('flags', () => getFlags())
     .register('logging', () => createLogger('aarogyam'))
-    .register('storage', () => createStorageService(paths.dataDir))
+    .register('storage', () =>
+      createStorageService(paths.dataDir, {
+        cache: {
+          enabled: get('storage.cache.enabled', true),
+          maxEntries: get('storage.cache.maxEntries', 100),
+        },
+      })
+    )
     .register('backup', () => createBackupManager())
     .register('discovery', () => createDiscoveryService())
     .register('sync', () => createSyncService());
