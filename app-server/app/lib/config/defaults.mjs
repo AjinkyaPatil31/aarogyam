@@ -75,6 +75,21 @@ export const DEFAULTS = Object.freeze({
     },
   },
 
+  // ── Logging (Milestone 4.2) ───────────────────────────────────────
+  // Consumed by app/lib/logging. File logging is opt-in; the logs
+  // directory is created by the installer, never by the logger.
+  logging: {
+    level: 'info',
+    console: {
+      enabled: true,
+    },
+    file: {
+      enabled: false,
+      maxSize: 1024 * 1024, // 1 MB rotation threshold
+      maxFiles: 5, // active + 4 rotated files
+    },
+  },
+
   // ── Storage engine (Milestone 4.1) ────────────────────────────────
   // In-memory read/write-through cache for the document storage engine.
   // Enabled by default for the shared instance; disable via
@@ -115,10 +130,6 @@ export const DEFAULTS = Object.freeze({
       database: '',     // database-location milestone (default: prisma/sqlite.db)
       backup: '',       // backup milestone
       logs: '',         // logging milestone
-    },
-    logging: {
-      level: 'info',
-      toFile: false,
     },
   },
 });

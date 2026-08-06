@@ -41,6 +41,17 @@ import { paths, resolveDataPath, resolvePath } from '../local/paths.mjs';
 import * as fsutil from '../local/fsutil.mjs';
 import { getArch, getPlatform } from '../system/index.mjs';
 import { createLogger } from '../logging/index.mjs';
+import { InstallerError } from '../local/errors.mjs';
+
+/** Wrap any thrown failure as a structured InstallerError (M4.2). */
+async function wrapInstallerError(promise, context) {
+  try {
+    return await promise;
+  } catch (cause) {
+    if (cause instanceof InstallerError) throw cause;
+    throw new InstallerError(`Installation failed during ${context}: ${cause.message}`, { cause });
+  }
+}
 
 /** Version of the installation-metadata shape (independent of app version). */
 export const METADATA_SCHEMA_VERSION = '1';
@@ -125,20 +136,30 @@ export function createInstaller(options = {}) {
 
     /** Create every required directory (recursive, idempotent). */
     async createRequiredDirectories() {
-      for (const dir of requiredDirectories) {
-        await fsutil.ensureDir(dir);
-        log.debug(`Ensured directory ${dir}`);
-      }
-      return [...requiredDirectories];
+      return wrapInstallerError(
+        (async () => {
+          for (const dir of requiredDirectories) {
+            await fsutil.ensureDir(dir);
+            log.debug(`Ensured directory ${dir}`);
+          }
+          return [...requiredDirectories];
+        })(),
+        'directory creation'
+      );
     },
 
     /** Probe every required directory for existence + writability. */
     async validatePermissions() {
-      const results = [];
-      for (const dir of requiredDirectories) {
-        results.push({ dir, ...(await fsutil.verifyDirectory(dir, { writable: true })) });
-      }
-      return { ok: results.every((r) => r.exists && r.isDirectory && r.writable), results };
+      return wrapInstallerError(
+        (async () => {
+          const results = [];
+          for (const dir of requiredDirectories) {
+            results.push({ dir, ...(await fsutil.verifyDirectory(dir, { writable: true })) });
+          }
+          return { ok: results.every((r) => r.exists && r.isDirectory && r.writable), results };
+        })(),
+        'permission validation'
+      );
     },
 
     /**
@@ -177,6 +198,11 @@ export function createInstaller(options = {}) {
      * (returns `unchanged: true`).
      */
     async install() {
+      return wrapInstallerError(installer._installInner(), 'installation');
+    },
+
+    /** Internal install implementation (wrapped by install()). */
+    async _installInner() {
       const firstLaunch = await installer.detectFirstLaunch();
       const previous = await fsutil.readJson(metadataFile, null);
       const version = await installer.appVersion();

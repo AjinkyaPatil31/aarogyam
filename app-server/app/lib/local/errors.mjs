@@ -52,6 +52,20 @@ export class PathViolationError extends Error {
 }
 
 /**
+ * Structured error raised by the installer (Milestone 3.3 / 4.2) when
+ * installation cannot complete. Carries the original failure as
+ * `cause` so the logging framework can preserve the root stack.
+ */
+export class InstallerError extends Error {
+  constructor(message, { cause } = {}) {
+    super(message);
+    this.name = 'InstallerError';
+    this.code = 'AAROGYAM_INSTALLER';
+    if (cause) this.cause = cause;
+  }
+}
+
+/**
  * Structured error raised by the storage engine (Milestone 4.1) when a
  * document fails integrity validation or an operation cannot complete.
  * Carries a machine-readable `code` (e.g. 'invalid-json',

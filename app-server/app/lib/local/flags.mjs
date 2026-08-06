@@ -11,7 +11,7 @@
  *    • lanMode           LAN mode                      (future.lanMode.enabled)
  *    • offlineMode       Offline mode                  (future.offlineMode.enabled)
  *    • automaticBackups  Automatic backups             (future.backup.enabled)
- *    • loggingToFile     Logging to disk               (future.logging.toFile)
+ *    • loggingToFile     Logging to disk               (logging.file.enabled)
  *    • discovery         LAN discovery                 (future.lanDiscovery.enabled)
  *    • synchronization   Data synchronization          (future.sync.enabled)
  *
@@ -29,7 +29,7 @@ export const FLAG_DEFINITIONS = Object.freeze({
   lanMode: { configKey: 'future.lanMode.enabled', default: false },
   offlineMode: { configKey: 'future.offlineMode.enabled', default: false },
   automaticBackups: { configKey: 'future.backup.enabled', default: false },
-  loggingToFile: { configKey: 'future.logging.toFile', default: false },
+  loggingToFile: { configKey: 'logging.file.enabled', default: false },
   discovery: { configKey: 'future.lanDiscovery.enabled', default: false },
   synchronization: { configKey: 'future.sync.enabled', default: false },
 });

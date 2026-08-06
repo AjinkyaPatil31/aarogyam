@@ -35,7 +35,7 @@
 import { paths } from '../local/paths.mjs';
 import * as fsutil from '../local/fsutil.mjs';
 import { getFlags } from '../local/flags.mjs';
-import { createLogger } from '../logging/index.mjs';
+import { getLogManager } from '../logging/index.mjs';
 import { createStorageService } from '../storage/index.mjs';
 import { createBackupManager } from '../backup/index.mjs';
 import { createDiscoveryService } from '../discovery/index.mjs';
@@ -217,7 +217,7 @@ export function registerInfrastructureServices(registry = createRegistry()) {
     .register('paths', () => paths)
     .register('fsutil', () => fsutil)
     .register('flags', () => getFlags())
-    .register('logging', () => createLogger('aarogyam'))
+    .register('logging', () => getLogManager())
     .register('storage', () =>
       createStorageService(paths.dataDir, {
         cache: {

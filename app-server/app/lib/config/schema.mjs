@@ -224,6 +224,59 @@ export const SCHEMA = [
     description: 'Headless mode for the local WhatsApp client (scripts/wa-init.mjs).',
   },
 
+  // ── Logging (Milestone 4.2) ───────────────────────────────────────
+  {
+    key: 'logging.level',
+    env: 'LOG_LEVEL',
+    defaultKey: 'logging.level',
+    required: false,
+    type: 'enum',
+    options: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'],
+    category: 'logging',
+    status: 'optional',
+    description: 'Minimum log level emitted by app/lib/logging.',
+  },
+  {
+    key: 'logging.console.enabled',
+    env: 'LOG_CONSOLE_ENABLED',
+    defaultKey: 'logging.console.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'logging',
+    status: 'optional',
+    description: 'Emit human-readable log lines to the console.',
+  },
+  {
+    key: 'logging.file.enabled',
+    env: 'LOG_FILE_ENABLED',
+    defaultKey: 'logging.file.enabled',
+    required: false,
+    type: 'boolean',
+    category: 'logging',
+    status: 'optional',
+    description: 'Persist structured JSONL log entries under the logs directory.',
+  },
+  {
+    key: 'logging.file.maxSize',
+    env: 'LOG_FILE_MAX_SIZE',
+    defaultKey: 'logging.file.maxSize',
+    required: false,
+    type: 'number',
+    category: 'logging',
+    status: 'optional',
+    description: 'Rotation threshold (bytes) for the active log file.',
+  },
+  {
+    key: 'logging.file.maxFiles',
+    env: 'LOG_FILE_MAX_FILES',
+    defaultKey: 'logging.file.maxFiles',
+    required: false,
+    type: 'number',
+    category: 'logging',
+    status: 'optional',
+    description: 'Maximum retained rotated log files (active + maxFiles - 1).',
+  },
+
   // ── Storage engine (Milestone 4.1) ────────────────────────────────
   {
     key: 'storage.cache.enabled',
@@ -377,27 +430,6 @@ export const SCHEMA = [
     status: 'future',
     description: 'Log directory (logging milestone).',
   },
-  {
-    key: 'future.logging.level',
-    env: 'LOG_LEVEL',
-    defaultKey: 'future.logging.level',
-    required: false,
-    type: 'enum',
-    options: ['debug', 'info', 'warn', 'error'],
-    category: 'future',
-    status: 'future',
-    description: 'Log verbosity (logging milestone).',
-  },
-  {
-    key: 'future.logging.toFile',
-    env: 'LOG_TO_FILE',
-    defaultKey: 'future.logging.toFile',
-    required: false,
-    type: 'boolean',
-    category: 'future',
-    status: 'future',
-    description: 'Mirror logs to a file (logging milestone).',
-  },
 ];
 
 /**
@@ -418,5 +450,12 @@ export const LEGACY = [
     removedIn: '3.1',
     reason:
       'Vercel CLI cloud artifact from the pre-Local-Edition era. Never read by application code.',
+  },
+  {
+    env: 'LOG_TO_FILE',
+    status: 'dead',
+    removedIn: '4.2',
+    reason:
+      'Replaced by LOG_FILE_ENABLED (logging.file.enabled) when the logging framework was completed in Milestone 4.2.',
   },
 ];

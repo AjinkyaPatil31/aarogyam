@@ -1,7 +1,9 @@
-# Aarogyam — Local Edition Infrastructure (Milestone 3.2 / 3.3)
+# Aarogyam — Local Edition Infrastructure (Milestones 3.2 → 4.2)
 
 This directory contains the **Local Infrastructure Foundation** (Milestone
-3.2) and the **Installer & Runtime Bootstrap** layer (Milestone 3.3).
+3.2), the **Installer & Runtime Bootstrap** layer (Milestone 3.3), the
+**Storage Engine** (Milestone 4.1) and the **Logging Framework**
+(Milestone 4.2).
 
 Nothing here runs automatically: no sockets open, no background processes
 begin, no filesystem changes occur on import, and no application behavior
@@ -13,12 +15,12 @@ the bootstrap manager) is explicitly invoked.
 | Path | Responsibility |
 | --- | --- |
 | `config/` | Milestone 3.1 centralized configuration system (pre-existing). |
-| `local/errors.mjs` | Shared error types (`NotImplementedError`, …). |
+| `local/errors.mjs` | Shared error types (`NotImplementedError`, `InstallerError`, `StorageError`, …). |
 | `local/paths.mjs` | **Runtime Path Manager** — the only module that resolves absolute paths. |
 | `local/fsutil.mjs` | Reusable filesystem primitives (atomic writes, hashing, copy/move…). |
 | `local/flags.mjs` | Centralized feature flags — all **disabled by default**. |
 | `lifecycle/index.mjs` | **Lifecycle interfaces** (M3.3) — six states + transition rules used by the registry and bootstrap. |
-| `logging/index.mjs` | Logging framework (info/warn/error/debug, console now, file later). |
+| `logging/index.mjs` | **Logging framework** (M4.2) — TRACE→FATAL levels, buffered async pipeline, console + rotating file sinks, logger hierarchy, structured entries, lifecycle. |
 | `storage/index.mjs` | **Storage engine** (M4.1) — namespaced, versioned, checksummed JSON documents with atomic writes, transactions, LRU cache, concurrency locking and lifecycle. |
 | `backup/index.mjs` | Backup framework (SQLite / settings / exports providers — interfaces only). |
 | `network/index.mjs` | Read-only network metadata helpers (no sockets). |
@@ -45,6 +47,52 @@ everything ◄── system/registry               (aggregation point)
 
 No module imports anything that imports it back. The registry and the
 bootstrap manager are the two aggregation points at the top of the graph.
+
+## Logging framework (Milestone 4.2)
+
+The single logging system for the application. Every infrastructure
+module obtains its own logger through `createLogger(name)` sharing one
+buffered asynchronous backend (the log manager). No infrastructure
+module uses `console.*` directly.
+
+- **Levels** — `TRACE < DEBUG < INFO < WARN < ERROR < FATAL`;
+  configurable via `logging.level` (per-logger overrides supported).
+- **Write pipeline** — `log.info(...)` → normalise entry → bounded FIFO
+  buffer → single drain loop takes ordered batches (max 64) → console
+  sink (human-readable, no stack) + file sink (JSONL with full
+  structured metadata incl. stack). Enqueue is synchronous and cheap;
+  disk I/O never blocks the caller.
+- **Buffer lifecycle** — bounded (`maxBufferEntries`, default 4096); on
+  saturation the OLDEST entries are dropped and counted in
+  `getStats().dropped`. `flush()` resolves only when the buffer is
+  empty and no drain cycle is running.
+- **File logging** — append-only JSONL at `<logsDir>/aarogyam.log`.
+  The log **directory is created by the installer only**; if it is
+  missing the file sink disables itself with a console warning (never
+  creates directories). A closed/stale handle reopens lazily on the
+  next write (restart-safe).
+- **Rotation** — by size (`logging.file.maxSize`, default 1 MB) with
+  `logging.file.maxFiles` retained files. The active file is renamed
+  aside **before** new entries are appended, so completed entries are
+  never lost. Rotation happens at open time and per batch.
+- **Logger hierarchy** — `createLogger('storage')` →
+  `.child('cache')` yields `storage:cache`; all loggers share the same
+  backend. Bootstrap creates `bootstrap`, installer creates
+  `installer`, etc.
+- **Structured entries** — `{ timestamp, level, module, service,
+  message, context, error: {name,message,code}, stack }`; context is
+  extensible. Error arguments (`StorageError`, `LifecycleError`,
+  `InstallerError`, …) are normalized; **stack traces appear only in
+  the file sink**, never in console output.
+- **Lifecycle** — `getLogManager().initialize()` → READY (sync, no
+  I/O); `flush()` drains; `shutdown()` flushes + closes the file
+  handle → STOPPED (a later write reopens lazily). The registry
+  registers the log manager as a service, so `shutdownAll()` flushes
+  and closes logs in the correct order.
+- **Configuration** — `logging.level`, `logging.console.enabled`,
+  `logging.file.enabled`, `logging.file.maxSize`,
+  `logging.file.maxFiles` — all via `config.get()`. The log directory
+  comes from `paths.logsDir` (`future.paths.logs` / `LOG_DIRECTORY`).
 
 ## Storage engine (Milestone 4.1)
 
@@ -184,8 +232,6 @@ Existing `future.*` keys reused by the infrastructure:
 | `future.paths.database` | `local/paths` |
 | `future.paths.backup` | `local/paths`, `backup` |
 | `future.paths.logs` | `local/paths`, `logging` |
-| `future.logging.level` | `logging` |
-| `future.logging.toFile` | `local/flags` |
 | `future.lanDiscovery.*` | `local/flags`, `discovery` |
 | `future.offlineMode.enabled` | `local/flags` |
 
@@ -196,19 +242,42 @@ Existing `future.*` keys reused by the infrastructure:
 | `storage.cache.enabled` | `STORAGE_CACHE_ENABLED` | `storage` |
 | `storage.cache.maxEntries` | `STORAGE_CACHE_MAX_ENTRIES` | `storage` |
 
+`logging.*` keys added in Milestone 4.2 (consumed by the logging
+framework — they replace the M3.1 `future.logging.*` scaffolding):
+
+| Key | Env var | Used by |
+| --- | --- | --- |
+| `logging.level` | `LOG_LEVEL` | `logging` |
+| `logging.console.enabled` | `LOG_CONSOLE_ENABLED` | `logging` |
+| `logging.file.enabled` | `LOG_FILE_ENABLED` | `logging`, `local/flags` |
+| `logging.file.maxSize` | `LOG_FILE_MAX_SIZE` | `logging` |
+| `logging.file.maxFiles` | `LOG_FILE_MAX_FILES` | `logging` |
+
+The removed `LOG_TO_FILE` variable (previously `future.logging.toFile`)
+is recorded as `status: 'dead'` in `config/schema.mjs` `LEGACY`, with
+`removedIn: '4.2'`.
+
 ## Storage dependency graph
 
 ```
 config, paths, fsutil, errors, lifecycle, logging ◄── storage   (no cycles)
 storage ◄── system/registry                                    (registered service)
-storage ◄── scripts/verify-{infrastructure,m33,m41}            (verification only)
+storage ◄── scripts/verify-{infrastructure,m33,m41,m42}        (verification only)
 ```
-| `future.sync.enabled` | `local/flags` |
-| `future.apiBaseUrl` | future milestones |
 
-Milestone 3.3 added **no new configuration keys**: the installer and
-bootstrap only consume values that already exist (`app.name`, the
-`future.paths.*` set) or read the app version from `package.json`.
+`logging` is registered as a service in the registry; because it is
+initialized early and stopped late (reverse order), every other service
+can log during its own shutdown and the log manager flushes last.
+
+## Configuration history
+
+- Milestone 3.3 added **no new configuration keys**: the installer and
+  bootstrap only consume values that already exist (`app.name`, the
+  `future.paths.*` set) or read the app version from `package.json`.
+- Milestone 4.1 added `storage.cache.*`.
+- Milestone 4.2 added `logging.*` (replacing the `future.logging.*`
+  scaffolding) and promoted the `loggingToFile` flag to
+  `logging.file.enabled`.
 
 ## Hard constraints honored
 
@@ -217,11 +286,15 @@ bootstrap only consume values that already exist (`app.name`, the
   prescription, RBAC or session code was modified.
 - No application code imports the new infrastructure modules yet.
 - No directories are created unless the installer/bootstrap is invoked.
+- No infrastructure module uses `console.*` directly — all logging
+  flows through the logging framework.
 
 ## How to verify
 
 ```bash
 node scripts/verify-infrastructure.mjs   # M3.2 static + load verification
 node scripts/verify-m33.mjs              # M3.3 installer/bootstrap verification
+node scripts/verify-m41.mjs              # M4.1 storage engine verification
+node scripts/verify-m42.mjs              # M4.2 logging framework verification
 npm run build                            # app build must still pass
 ```

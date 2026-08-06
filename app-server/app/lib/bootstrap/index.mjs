@@ -38,17 +38,7 @@ import { get } from '../config/index.mjs';
 import { LIFECYCLE_STATES, createLifecycle } from '../lifecycle/index.mjs';
 import { createInstaller } from '../installer/index.mjs';
 import { createRegistry, registerInfrastructureServices } from '../system/registry.mjs';
-import { createLogger } from '../logging/index.mjs';
-
-/**
- * Allow in-flight (fire-and-forget) file log appends to drain.
- * NOTE: console logging is synchronous; the async file-logging path is
- * fire-and-forget with no completion tracking, so this is best-effort.
- * A real flush must land with the file-logging milestone.
- */
-function drainPendingLogWrites() {
-  return new Promise((resolve) => setImmediate(resolve));
-}
+import { createLogger, flushLogs } from '../logging/index.mjs';
 
 /**
  * Create a bootstrap manager.
@@ -174,8 +164,10 @@ export function createBootstrapManager(options = {}) {
         log.error('Shutdown error while stopping services', err);
       }
 
-      // 2. Flush — allow any in-flight async file log appends to drain.
-      await drainPendingLogWrites();
+      // 2. Flush — guarantee every buffered async log write reaches
+      //    disk (the logging framework's flush drains its bounded buffer
+      //    and waits for the drain loop to finish).
+      await flushLogs();
 
       // 3. Mark stopped.
       lifecycle.transitionTo(LIFECYCLE_STATES.STOPPED);
