@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 import { requireAuth, requireRole } from "@/app/lib/authHelpers";
 import bcrypt from "bcryptjs";
+import { config } from "@/app/lib/config/index.mjs";
 
 // Forces Next.js to use the standard Node.js runtime (not Edge)
 export const runtime = 'nodejs';
@@ -164,7 +165,7 @@ export async function POST(request) {
 
     try { 
       const { sendWhatsAppMessage } = await import('@/app/lib/whatsappProvider'); 
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'; 
+      const appUrl = config.app.url; 
       const message = `*Aarogyam Healthcare* 🏥\n\nGreetings ${fullName},\n\nWelcome! Your profile has been created.\n\n*User ID:* ${email}\n*Password:* ${password}\n\nLogin at: ${appUrl}/login\n\n_If required, change your password after first login._`; 
  
       await sendWhatsAppMessage(contact, message); 

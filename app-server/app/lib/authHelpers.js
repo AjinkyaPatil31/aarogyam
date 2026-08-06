@@ -1,5 +1,6 @@
 import { verifyToken } from '@/app/api/lib/jwt';
 import { apiError } from './apiResponse';
+import { config } from '@/app/lib/config/index.mjs';
 
 /**
  * Extracts and verifies the JWT token from the Authorization header.
@@ -7,7 +8,7 @@ import { apiError } from './apiResponse';
  */
 export async function getAuthPayload(request) {
   try {
-    let token = request.cookies.get('aarogyam_token')?.value;
+    let token = request.cookies.get(config.session.cookieName)?.value;
     
     if (!token) {
       const authHeader = request.headers.get('authorization') ?? request.headers.get('Authorization');

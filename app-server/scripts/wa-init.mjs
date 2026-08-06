@@ -12,6 +12,7 @@ import {
   readQueue,
   writeQueue,
 } from '../app/lib/waQueue.js';
+import { config } from '../app/lib/config/index.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE_DIR = join(__dirname, '..');
@@ -19,9 +20,8 @@ const BASE_DIR = join(__dirname, '..');
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: 'aarogyam' }),
   puppeteer: {
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
-      || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    headless: true,
+    executablePath: config.whatsapp.puppeteer.executablePath,
+    headless: config.whatsapp.puppeteer.headless,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',

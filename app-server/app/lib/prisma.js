@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { config } from '@/app/lib/config/index.mjs';
 
 const globalForPrisma = globalThis;
 
@@ -6,6 +7,6 @@ const globalForPrisma = globalThis;
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({
   log: ['error']});
 
-if (process.env.NODE_ENV !== "production") {
+if (!config.env.isProduction) {
   globalForPrisma.prisma = prisma;
 }

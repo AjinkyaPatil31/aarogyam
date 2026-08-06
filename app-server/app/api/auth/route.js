@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/app/lib/prisma';
 import { signToken } from '@/app/api/lib/jwt';
+import { config } from '@/app/lib/config/index.mjs';
 
 export const runtime = 'nodejs';
 
@@ -42,15 +43,11 @@ export async function POST(req) {
       
       const response = NextResponse.json({ user: safeUser }, { status: 201 });
       
-      // Determine sliding session timeout from env vars
-      const timeoutMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
-      const maxAge = timeoutMinutes * 60;
+      // Sliding-session timeout from centralized config
+      const maxAge = config.session.idleTimeoutMinutes * 60;
       
-      response.cookies.set('aarogyam_token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
+      response.cookies.set(config.session.cookieName, token, {
+        ...config.session.cookie,
         maxAge: maxAge
       });
       
@@ -85,15 +82,11 @@ export async function POST(req) {
       
       const response = NextResponse.json({ user: safeUser });
       
-      // Determine sliding session timeout from env vars
-      const timeoutMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
-      const maxAge = timeoutMinutes * 60;
+      // Sliding-session timeout from centralized config
+      const maxAge = config.session.idleTimeoutMinutes * 60;
       
-      response.cookies.set('aarogyam_token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
+      response.cookies.set(config.session.cookieName, token, {
+        ...config.session.cookie,
         maxAge: maxAge
       });
       

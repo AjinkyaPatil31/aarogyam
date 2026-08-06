@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyToken, signToken } from '@/app/api/lib/jwt';
+// Alias avoids clashing with this file's own `export const config` (matcher).
+import { config as appConfig } from '@/app/lib/config/index.mjs';
 
 export async function middleware(req) {
   const { pathname } = req.nextUrl;
@@ -15,7 +17,7 @@ export async function middleware(req) {
     return NextResponse.next();
   }
 
-  let token = req.cookies.get('aarogyam_token')?.value;
+  let token = req.cookies.get(appConfig.session.cookieName)?.value;
   if (!token) {
     const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
     if (authHeader?.startsWith('Bearer ')) {
@@ -74,19 +76,16 @@ export async function middleware(req) {
     const now = Math.floor(Date.now() / 1000);
     const timeRemaining = exp - now;
     
-    const thresholdMinutes = parseInt(process.env.SESSION_REFRESH_THRESHOLD_MINUTES || '15', 10);
+    const thresholdMinutes = appConfig.session.refreshThresholdMinutes;
     const thresholdSeconds = thresholdMinutes * 60;
     
     if (timeRemaining <= thresholdSeconds) {
-      const idleMinutes = parseInt(process.env.SESSION_IDLE_TIMEOUT_MINUTES || '60', 10);
+      const idleMinutes = appConfig.session.idleTimeoutMinutes;
       const newPayload = { id: payload.id, email: payload.email, role: payload.role };
       const newToken = await signToken(newPayload);
       
-      response.cookies.set('aarogyam_token', newToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        path: '/',
+      response.cookies.set(appConfig.session.cookieName, newToken, {
+        ...appConfig.session.refreshCookie,
         maxAge: idleMinutes * 60,
       });
     }

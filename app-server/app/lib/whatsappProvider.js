@@ -1,14 +1,15 @@
 /**
  * WhatsApp Provider Abstraction
- * Routes messages dynamically based on process.env.WA_PROVIDER
+ * Routes messages dynamically based on the configured provider
+ * (config.whatsapp.provider — Milestone 3.1).
  */
 import { acquireLock, releaseLock, readQueue, writeQueue } from './waQueue';
+import { config } from '@/app/lib/config/index.mjs';
 
-const MAX_QUEUE_SIZE = 500;
 const BASE_DIR = process.cwd();
 
 export async function sendWhatsAppMessage(phone, message) {
-  const provider = process.env.WA_PROVIDER || 'webjs';
+  const provider = config.whatsapp.provider;
 
   if (provider === 'twilio') {
     return await sendViaTwilio(phone, message);
@@ -18,22 +19,20 @@ export async function sendWhatsAppMessage(phone, message) {
 }
 
 async function sendViaTwilio(phone, message) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER; // e.g. 7621843726
+  const { accountSid, authToken, fromNumber } = config.whatsapp.twilio;
   
   if (!accountSid || !authToken || !fromNumber) {
     throw new Error('Twilio configuration is missing');
   }
 
   // Always use WhatsApp protocol for Twilio WhatsApp provider.
-  // Ensure From has whatsapp: prefix even if env var is just a bare number.
+  // Ensure From has whatsapp: prefix even if config is just a bare number.
   const rawFrom = fromNumber.replace(/^whatsapp:/i, '');
   const formattedFrom = `whatsapp:${rawFrom.startsWith('+') ? rawFrom : '+' + rawFrom}`;
   // Always prefix To with whatsapp: and country code for WhatsApp delivery.
   const formattedTo = `whatsapp:+91${phone.replace(/[^0-9]/g, '').slice(-10)}`;
 
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  const url = `${config.whatsapp.twilio.apiBase}${accountSid}/Messages.json`;
   
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
@@ -83,9 +82,10 @@ async function sendViaWebJS(phone, message) {
   try {
     const queue = readQueue(BASE_DIR);
 
-    if (queue.length >= MAX_QUEUE_SIZE) {
+    const maxQueueSize = config.whatsapp.queue.maxSize;
+    if (queue.length >= maxQueueSize) {
       const unSent = queue.filter(q => !q.sent);
-      if (unSent.length >= MAX_QUEUE_SIZE) {
+      if (unSent.length >= maxQueueSize) {
         throw new Error('Queue is full');
       }
       queue.splice(0, queue.length - unSent.length); 

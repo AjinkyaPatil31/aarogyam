@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "prisma generate && next build",
-    "start": "next start",
+    "dev": "node scripts/validate-config.mjs && next dev",
+    "build": "node scripts/validate-config.mjs && prisma generate && next build",
+    "start": "node scripts/validate-config.mjs && next start",
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
