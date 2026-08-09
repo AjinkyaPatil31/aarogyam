@@ -37,7 +37,9 @@ export async function GET(request) {
         );
       }
 
-      return NextResponse.json({ patient: user });
+      // Never expose the password hash — even to the account owner.
+      const { passwordHash, ...safeUser } = user;
+      return NextResponse.json({ patient: safeUser });
     }
 
     // ── Return all patients (DOCTOR / COMPOUNDER only) ───────────
@@ -173,10 +175,13 @@ export async function POST(request) {
       console.error('WhatsApp notification failed (non-fatal):', waError); 
     }
 
+    // F2 — never return the created account's password hash.
+    const { passwordHash: _, ...safePatient } = patient;
+
     return NextResponse.json(
       {
         message: "Patient registered successfully",
-        patient,
+        patient: safePatient,
         generatedPassword: password,
         generatedEmail: email,
       },
@@ -202,6 +207,21 @@ export async function DELETE(req) {
       return NextResponse.json(
         { error: 'patientId is required' },
         { status: 400 }
+      );
+    }
+
+    // M1.3 — only PATIENT accounts may be deleted through this endpoint.
+    // Without this guard a staff member could pass the id of a DOCTOR or
+    // COMPOUNDER account (ids are enumerable via /api/appointments?doctors=true)
+    // and delete staff through the patient lifecycle endpoint.
+    const target = await prisma.user.findUnique({
+      where: { id: patientId },
+      select: { role: true },
+    });
+    if (!target || target.role !== 'PATIENT') {
+      return NextResponse.json(
+        { error: 'Patient not found' },
+        { status: 404 }
       );
     }
 
@@ -238,7 +258,7 @@ export async function DELETE(req) {
   } catch (err) {
     console.error('DELETE patient error:', err);
     return NextResponse.json(
-      { error: err.message },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }
@@ -274,7 +294,7 @@ export async function PUT(req) {
   } catch (err) {
     console.error('PUT patient error:', err);
     return NextResponse.json(
-      { error: err.message },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

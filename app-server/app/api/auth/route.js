@@ -11,50 +11,13 @@ export async function POST(req) {
     const body = await req.json();
     const { action } = body;
 
-    // ── REGISTER (used by compounder to create patients) ──
-    if (action === 'register') {
-      const { email, password, role } = body;
-      if (!email || !password || !role) {
-        return NextResponse.json(
-          { error: 'User ID, password and role are required' },
-          { status: 400 }
-        );
-      }
-      const allowed = ['DOCTOR', 'COMPOUNDER', 'PATIENT'];
-      if (!allowed.includes(role)) {
-        return NextResponse.json(
-          { error: 'Invalid role. Must be DOCTOR, COMPOUNDER or PATIENT' },
-          { status: 400 }
-        );
-      }
-      const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        return NextResponse.json(
-          { error: 'User ID already registered' },
-          { status: 409 }
-        );
-      }
-      const passwordHash = await bcrypt.hash(password, 10);
-      const user = await prisma.user.create({
-        data: { email, passwordHash, role },
-      });
-      const { passwordHash: _, ...safeUser } = user;
-      const token = await signToken({ id: user.id, email: user.email, role: user.role });
-      
-      const response = NextResponse.json({ user: safeUser }, { status: 201 });
-      
-      // Sliding-session timeout from centralized config
-      const maxAge = config.session.idleTimeoutMinutes * 60;
-      
-      response.cookies.set(config.session.cookieName, token, {
-        ...config.session.cookie,
-        maxAge: maxAge
-      });
-      
-      return response;
-    }
-
-    // ── LOGIN ──
+    // ── LOGIN (only supported action) ──
+    // Account creation is intentionally NOT handled here:
+    //   • Patients are registered via POST /api/patients  (DOCTOR/COMPOUNDER only)
+    //   • Staff (DOCTOR/COMPOUNDER) are created via POST /api/staff (DOCTOR only)
+    //   • Bootstrap accounts are created offline by prisma/seed.js
+    // Previously an unauthenticated `register` action allowed any anonymous client
+    // to create privileged DOCTOR/COMPOUNDER accounts (P0 — fixed).
     if (action === 'login') {
       const { email, password } = body;
       if (!email || !password) {
@@ -98,7 +61,7 @@ export async function POST(req) {
   } catch (err) {
     console.error('AUTH ROUTE ERROR:', err);
     return NextResponse.json(
-      { error: 'Internal server error', detail: err.message },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

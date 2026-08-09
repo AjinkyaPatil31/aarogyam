@@ -495,6 +495,42 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// J. M1.3 HARDENING — F1 stats authorization, F2 hash hygiene, F4 atomic PATCH
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // F1 — ?stats=true restricted to DOCTOR/COMPOUNDER
+  const s1 = await api('/api/appointments?stats=true');
+  record('M13 STATS anonymous -> 401', s1.status === 401, 401, s1.status);
+  const s2 = await api('/api/appointments?stats=true', { cookie: patientA.cookie });
+  record('M13 STATS patient -> 403', s2.status === 403, 403, s2.status);
+  const s3 = await api('/api/appointments?stats=true', { token: compounder.token });
+  record('M13 STATS compounder -> 200 with counts', s3.status === 200 && typeof s3.data?.totalPatients === 'number', true, s3.status);
+  const s4 = await api('/api/appointments?stats=true', { token: doctor.token });
+  record('M13 STATS doctor -> 200 with counts', s4.status === 200 && typeof s4.data?.totalPatients === 'number', true, s4.status);
+  const s5 = await api('/api/appointments', { token: doctor.token });
+  record('M13 ordinary appointment GET doctor unchanged -> 200 list', s5.status === 200 && Array.isArray(s5.data?.appointments), true, s5.status);
+
+  // F4 — atomic ownership-scoped PATCH; injected doctorId cannot redirect
+  const a1 = await api('/api/appointments', { method: 'PATCH', body: { appointmentId: apptAId, status: 'Confirmed' } });
+  record('M13 PATCH anonymous -> 401', a1.status === 401, 401, a1.status);
+  const a2 = await api('/api/appointments', { method: 'PATCH', token: doctor.token, body: { appointmentId: apptBId, status: 'Confirmed', doctorId: doctor2Id } });
+  record('M13 PATCH own appt with injected doctorId -> 200', a2.status === 200, 200, a2.status);
+  const a3 = await api('/api/appointments', { cookie: patientB.cookie });
+  const apptBAfter = (a3.data?.appointments || []).find((x) => x.id === apptBId);
+  record('M13 PATCH injected doctorId ignored (doctor unchanged)', !!apptBAfter && apptBAfter.doctor?.id === realDocId, realDocId, apptBAfter?.doctor?.id);
+  const d2b = await login('doctor2_sec@aarogyam.local', 'Doctor2@123');
+  const a4 = await api('/api/appointments', { method: 'PATCH', token: d2b.token, body: { appointmentId: apptBId, status: 'Cancelled' } });
+  record('M13 PATCH other doctor appointment -> 404', a4.status === 404, 404, a4.status);
+
+  // F2 — POST /api/patients response never contains passwordHash
+  const h1 = await api('/api/patients', { method: 'POST', token: doctor.token, body: mkPatient('patient_h_sec@aarogyam.local', 'Sec Hygiene', '9000000098') });
+  record('M13 POST patient -> 201, id present, NO passwordHash', h1.status === 201 && !!h1.data?.patient?.id && !('passwordHash' in (h1.data?.patient || {})), true, h1.status);
+  if (h1.data?.patient?.id) {
+    await api('/api/patients', { method: 'DELETE', token: doctor.token, body: { patientId: h1.data.patient.id } });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TEARDOWN — remove every fixture through the API, restore baseline
 // ─────────────────────────────────────────────────────────────────────────────
 {

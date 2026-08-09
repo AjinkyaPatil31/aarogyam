@@ -112,7 +112,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true, record }, { status: 201 });
   } catch (err) {
     console.error('POST /api/consultation error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -143,6 +143,6 @@ export async function GET(request) {
     return NextResponse.json({ records });
   } catch (err) {
     console.error('GET /api/consultation error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

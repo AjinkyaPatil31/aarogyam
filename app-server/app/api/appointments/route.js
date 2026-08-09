@@ -11,8 +11,11 @@ export async function GET(req) {
 
     const { searchParams } = new URL(req.url);
 
-    // Stats endpoint for doctor KPI cards
+    // Stats endpoint for doctor KPI cards — DOCTOR/COMPOUNDER only (F1)
     if (searchParams.get('stats') === 'true') {
+      const roleCheck = await requireRole(req, ['DOCTOR', 'COMPOUNDER']);
+      if (roleCheck.errorResponse) return roleCheck.errorResponse;
+
       const today = new Date().toISOString().split('T')[0];
       const [totalPatients, pendingAppts, todayAppts] = await Promise.all([
         prisma.user.count({ where: { role: 'PATIENT' } }),
@@ -105,7 +108,7 @@ export async function GET(req) {
     return NextResponse.json({ appointments: [] });
   } catch (err) {
     console.error('GET appointments error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -167,7 +170,7 @@ export async function POST(req) {
       );
     }
     console.error('POST appointments error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -186,14 +189,37 @@ export async function PATCH(req) {
       );
     }
 
-    const updated = await prisma.appointment.update({
-      where: { id: appointmentId },
+    // M1.3 (F4) — atomic ownership-scoped status change. The conditional
+    // updateMany restricts the write to the authenticated doctor's own
+    // appointment, eliminating the TOCTOU window of a separate ownership
+    // lookup; other doctors' appointments resolve to 404 and stay
+    // unobservable.
+    const result = await prisma.appointment.updateMany({
+      where: { id: appointmentId, doctorId: payload.id },
       data: { status },
     });
+    if (result.count === 0) {
+      return NextResponse.json(
+        { error: 'Appointment not found' },
+        { status: 404 }
+      );
+    }
+
+    const updated = await prisma.appointment.findUnique({
+      where: { id: appointmentId },
+    });
+    if (!updated) {
+      // Unreachable in practice (single-writer SQLite); guards the response
+      // contract against a concurrent deletion between the update and read.
+      return NextResponse.json(
+        { error: 'Appointment not found' },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({ success: true, appointment: updated });
   } catch (err) {
     console.error('PATCH appointments error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

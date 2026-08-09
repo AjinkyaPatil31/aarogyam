@@ -20,7 +20,7 @@ export async function GET(req) {
     return NextResponse.json({ staff });
   } catch (err) {
     console.error('GET staff error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -68,7 +68,7 @@ export async function POST(req) {
     return NextResponse.json({ success: true, user }, { status: 201 });
   } catch (err) {
     console.error('POST staff error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -92,10 +92,24 @@ export async function DELETE(req) {
       );
     }
 
+    // M1.3 — only DOCTOR/COMPOUNDER accounts may be removed through this
+    // endpoint. Without this guard a doctor could pass a PATIENT's user id
+    // and delete patient accounts via the staff-management endpoint.
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    if (!target || !['DOCTOR', 'COMPOUNDER'].includes(target.role)) {
+      return NextResponse.json(
+        { error: 'Staff member not found' },
+        { status: 404 }
+      );
+    }
+
     await prisma.user.delete({ where: { id: userId } });
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('DELETE staff error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

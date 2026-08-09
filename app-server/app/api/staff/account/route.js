@@ -81,6 +81,6 @@ export async function PUT(req) {
     });
   } catch (err) {
     console.error('Account update error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
