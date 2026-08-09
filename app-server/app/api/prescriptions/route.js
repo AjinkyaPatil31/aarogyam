@@ -14,6 +14,61 @@ export async function GET(req) {
     const patientId = searchParams.get('patientId');
     const recordId = searchParams.get('recordId');
 
+    // ── PATIENT — strict self-ownership, no existence oracle (F-2) ────────
+    // Authorization is embedded in the database query: a record is fetched
+    // only when it is BOTH the requested recordId AND owned by the
+    // authenticated patient (payload.id). Nonexistent records and records
+    // belonging to other patients therefore both resolve to 404, so a patient
+    // cannot distinguish whether a record exists. A client-supplied patientId
+    // that disagrees with the session is rejected with the same 404 shape so
+    // no information is disclosed, and no medical data is ever returned for
+    // an unauthorized record.
+    if (payload.role === 'PATIENT') {
+      if (recordId) {
+        if (patientId && patientId !== payload.id) {
+          return NextResponse.json(
+            { error: 'Record not found' },
+            { status: 404 }
+          );
+        }
+        const record = await prisma.medicalRecord.findFirst({
+          where: { id: recordId, patientId: payload.id },
+          include: {
+            prescriptions: true,
+            doctor: { select: { email: true } },
+          },
+        });
+        if (!record) {
+          return NextResponse.json(
+            { error: 'Record not found' },
+            { status: 404 }
+          );
+        }
+        return NextResponse.json({ record });
+      }
+
+      // List branch — bound to the authenticated identity. Any patientId
+      // other than the session identity is rejected outright (403), and the
+      // lookup always runs against payload.id so a forged parameter can never
+      // widen the query.
+      if (patientId && patientId !== payload.id) {
+        return NextResponse.json(
+          { error: 'Forbidden' },
+          { status: 403 }
+        );
+      }
+      const ownRecords = await prisma.medicalRecord.findMany({
+        where: { patientId: payload.id },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          prescriptions: true,
+          doctor: { select: { email: true } },
+        },
+      });
+      return NextResponse.json({ records: ownRecords });
+    }
+
+    // ── DOCTOR / COMPOUNDER — clinic-wide read (unchanged) ────────────
     if (recordId) {
       const record = await prisma.medicalRecord.findUnique({
         where: { id: recordId },
@@ -36,6 +91,17 @@ export async function GET(req) {
           { status: 404 }
         );
       }
+
+      // Contradictory identifiers (staff): when BOTH patientId and recordId
+      // are supplied they must refer to the same patient. The PATIENT branch
+      // above enforces the same property through its scoped 404 lookup.
+      if (patientId && record.patientId !== patientId) {
+        return NextResponse.json(
+          { error: 'Forbidden' },
+          { status: 403 }
+        );
+      }
+
       return NextResponse.json({ record });
     }
 
@@ -52,7 +118,7 @@ export async function GET(req) {
     return NextResponse.json({ records });
   } catch (err) {
     console.error('GET prescriptions error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -270,12 +336,21 @@ export async function POST(req) {
         });
       }
 
-      // Mark appointment as Completed if appointmentId provided
+      // M1.3 — mark the consulted patient's OWN appointment as Completed when
+      // appointmentId is provided. An id belonging to another patient (or a
+      // nonexistent id) is ignored so a crafted request can neither tamper
+      // with another patient's appointment nor fail the consultation.
       if (appointmentId) {
-        await tx.appointment.update({
-          where: { id: appointmentId },
-          data: { status: 'Completed' },
+        const ownedAppointment = await tx.appointment.findFirst({
+          where: { id: appointmentId, patientId },
+          select: { id: true },
         });
+        if (ownedAppointment) {
+          await tx.appointment.update({
+            where: { id: ownedAppointment.id },
+            data: { status: 'Completed' },
+          });
+        }
       }
 
       return await tx.medicalRecord.findUnique({
@@ -290,6 +365,6 @@ export async function POST(req) {
     );
   } catch (err) {
     console.error('POST prescriptions error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
