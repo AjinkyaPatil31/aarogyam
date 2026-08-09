@@ -4,6 +4,12 @@ import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
+// ── M1.4 — vitals validation helpers (mirror the prescription-route checks) ─
+function isParsableNumeric(v) {
+  if (v === null || v === undefined || v === '') return false;
+  return !isNaN(Number(v));
+}
+
 // POST /api/consultation — save walk-in consultation + prescriptions
 export async function POST(request) {
   const { payload, errorResponse } = await requireRole(request, ['DOCTOR']);
@@ -40,6 +46,45 @@ export async function POST(request) {
     if (!bloodPressure || !heartRate || !temperature || !spo2 || !weight || !respiratoryRate) {
       return NextResponse.json(
         { error: 'All 6 vitals are required: bloodPressure, heartRate, temperature, spo2, weight, respiratoryRate' },
+        { status: 400 }
+      );
+    }
+
+    // M1.4 — vitals validation, consistent with the prescription-route
+    // contract. All checks run before any database write.
+    if (typeof bloodPressure !== 'string' || bloodPressure.length > 10 ||
+        !/^\d+\/\d+$/.test(bloodPressure.trim())) {
+      return NextResponse.json(
+        { error: 'Validation failed: bloodPressure must be in format "120/80"' },
+        { status: 400 }
+      );
+    }
+    const numericVitals = [
+      ['heartRate', heartRate, 1, 400],
+      ['temperature', temperature, 20, 120],
+      ['spo2', spo2, 1, 100],
+      ['weight', weight, 1, 500],
+      ['respiratoryRate', respiratoryRate, 1, 100],
+    ];
+    for (const [name, value, min, max] of numericVitals) {
+      if (!isParsableNumeric(value) || String(value).length > 10) {
+        return NextResponse.json(
+          { error: `Validation failed: ${name} must be a numeric value` },
+          { status: 400 }
+        );
+      }
+      const n = Number(value);
+      if (n < min || n > max) {
+        return NextResponse.json(
+          { error: `Validation failed: ${name} must be between ${min} and ${max}` },
+          { status: 400 }
+        );
+      }
+    }
+    if (typeof symptoms !== 'string' || symptoms.length > 5000 ||
+        typeof diagnosis !== 'string' || diagnosis.length > 5000) {
+      return NextResponse.json(
+        { error: 'Validation failed: symptoms and diagnosis exceed the maximum allowed length' },
         { status: 400 }
       );
     }
@@ -129,13 +174,17 @@ export async function GET(request) {
       return NextResponse.json({ error: 'patientId query param required' }, { status: 400 });
     }
 
-    // Patients can only fetch their own records
-    if (payload.role === 'PATIENT' && payload.id !== patientId) {
+    // Patients can only fetch their own records (M1.4-04). The lookup is
+    // bound to the authenticated identity (payload.id) so a forged patientId
+    // parameter can never widen the query; the 403 for a foreign patientId is
+    // preserved (consistent with the prescriptions list branch). Staff
+    // clinic-wide read behavior is unchanged.
+    if (payload.role === 'PATIENT' && patientId !== payload.id) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const records = await prisma.medicalRecord.findMany({
-      where: { patientId },
+      where: payload.role === 'PATIENT' ? { patientId: payload.id } : { patientId },
       orderBy: { createdAt: 'desc' },
       include: { prescriptions: true },
     });

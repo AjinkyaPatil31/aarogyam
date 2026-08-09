@@ -5,6 +5,14 @@ import bcrypt from 'bcryptjs';
 
 export const runtime = 'nodejs';
 
+// ── M1.4 — lenient User ID ("newEmail") format check, same contract as
+// POST /api/staff: the clinic uses display-name style IDs (e.g. "Vinod
+// Patil") as well as email-style IDs.
+function isValidUserId(v) {
+  if (typeof v !== 'string' || v.trim().length === 0 || v.length > 254) return false;
+  return !/[\u0000-\u001F\u007F]/.test(v);
+}
+
 export async function PUT(req) {
   try {
     const { payload, errorResponse } = await requireAuth(req);
@@ -39,6 +47,13 @@ export async function PUT(req) {
 
     // Update User ID (email) if provided
     if (newEmail && newEmail !== user.email) {
+      // M1.4 — format + length check before any DB access.
+      if (!isValidUserId(newEmail)) {
+        return NextResponse.json(
+          { error: 'User ID must be a non-empty identifier up to 254 characters' },
+          { status: 400 }
+        );
+      }
       const existing = await prisma.user.findUnique({
         where: { email: newEmail },
       });
@@ -56,6 +71,12 @@ export async function PUT(req) {
       if (newPassword.length < 8) {
         return NextResponse.json(
           { error: 'New password must be at least 8 characters' },
+          { status: 400 }
+        );
+      }
+      if (newPassword.length > 128) {
+        return NextResponse.json(
+          { error: 'New password must be at most 128 characters' },
           { status: 400 }
         );
       }
@@ -80,6 +101,15 @@ export async function PUT(req) {
       passwordChanged: !!updateData.passwordHash,
     });
   } catch (err) {
+    // M1.4 — race-safe duplicate handling: the pre-check above normally
+    // returns 409, but a concurrent update can still hit the unique email
+    // constraint; map P2002 to the same 409 response.
+    if (err?.code === 'P2002') {
+      return NextResponse.json(
+        { error: 'This User ID is already taken' },
+        { status: 409 }
+      );
+    }
     console.error('Account update error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

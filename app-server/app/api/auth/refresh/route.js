@@ -18,13 +18,31 @@ export async function POST(req) {
 
     // Verify existing token
     const payload = await verifyToken(token);
+    if (!payload) {
+      return NextResponse.json(
+        { error: 'Token invalid or expired' },
+        { status: 401 }
+      );
+    }
+
+    // F-1 identity contract (M1.4) — refuse to re-sign a token whose claims
+    // do not carry a valid identity. A cryptographically valid token with
+    // missing/invalid id, email or role must not be re-issued as a fresh,
+    // longer-lived token; such tokens are treated as unauthenticated (401).
+    const { id, email, role } = payload;
+    if (
+      typeof id !== 'string' || id.length === 0 ||
+      typeof email !== 'string' || email.length === 0 ||
+      !['DOCTOR', 'COMPOUNDER', 'PATIENT'].includes(role)
+    ) {
+      return NextResponse.json(
+        { error: 'Token invalid or expired' },
+        { status: 401 }
+      );
+    }
 
     // Issue fresh token with same identity
-    const newToken = await signToken({
-      id: payload.id,
-      email: payload.email,
-      role: payload.role,
-    });
+    const newToken = await signToken({ id, email, role });
 
     return NextResponse.json({ token: newToken });
   } catch (err) {

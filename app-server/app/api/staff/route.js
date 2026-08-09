@@ -5,6 +5,15 @@ import bcrypt from 'bcryptjs';
 
 export const runtime = 'nodejs';
 
+// ── M1.4 — User ID ("email") format check ────────────────────────────────────
+// The clinic uses display-name style IDs (e.g. "Vinod Patil") as well as
+// email-style IDs, so this is a lenient identifier check (non-empty,
+// length-capped, no control characters) rather than strict email syntax.
+function isValidUserId(v) {
+  if (typeof v !== 'string' || v.trim().length === 0 || v.length > 254) return false;
+  return !/[\u0000-\u001F\u007F]/.test(v);
+}
+
 // GET — list all staff (doctors and compounders)
 export async function GET(req) {
   try {
@@ -51,6 +60,20 @@ export async function POST(req) {
       );
     }
 
+    // M1.4 — User ID format + length limits (before any DB write).
+    if (!isValidUserId(email)) {
+      return NextResponse.json(
+        { error: 'User ID must be a non-empty identifier up to 254 characters' },
+        { status: 400 }
+      );
+    }
+    if (typeof password !== 'string' || password.length > 128) {
+      return NextResponse.json(
+        { error: 'Password must be at most 128 characters' },
+        { status: 400 }
+      );
+    }
+
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json(
@@ -67,6 +90,15 @@ export async function POST(req) {
 
     return NextResponse.json({ success: true, user }, { status: 201 });
   } catch (err) {
+    // M1.4 — race-safe duplicate handling: the pre-check above normally
+    // returns 409, but a concurrent create can still hit the unique email
+    // constraint; map P2002 to the same 409 response.
+    if (err?.code === 'P2002') {
+      return NextResponse.json(
+        { error: 'A user with this User ID already exists' },
+        { status: 409 }
+      );
+    }
     console.error('POST staff error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

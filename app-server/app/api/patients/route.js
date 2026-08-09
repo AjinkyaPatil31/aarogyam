@@ -7,6 +7,13 @@ import { config } from "@/app/lib/config/index.mjs";
 // Forces Next.js to use the standard Node.js runtime (not Edge)
 export const runtime = 'nodejs';
 
+// ── M1.4 — RFC-lite email + field length caps for patient creation ───────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmail(v) {
+  return typeof v === 'string' && v.length <= 254 && EMAIL_RE.test(v);
+}
+
 /**
  * GET /api/patients
  *   Returns the list of all patients (doctor use) or the current user's profile.
@@ -125,6 +132,28 @@ export async function POST(request) {
       );
     }
 
+    // M1.4 — RFC-lite email format + field length caps (before any DB write).
+    // Auto-generated emails always pass; a client-supplied email must look
+    // like an email.
+    if (!isValidEmail(email)) {
+      return NextResponse.json(
+        { error: "Invalid email format" },
+        { status: 400 }
+      );
+    }
+    if (
+      (typeof fullName === 'string' && fullName.length > 200) ||
+      (typeof contact === 'string' && contact.length > 20) ||
+      (typeof medicalHistory === 'string' && medicalHistory.length > 2000) ||
+      (typeof gender === 'string' && gender.length > 30) ||
+      (typeof dob === 'string' && dob.length > 20)
+    ) {
+      return NextResponse.json(
+        { error: "Input field exceeds maximum allowed length" },
+        { status: 400 }
+      );
+    }
+
     // Validate 10-digit contact number
     const digitsOnly = contact.replace(/[^0-9]/g, "");
     if (digitsOnly.length !== 10) {
@@ -188,6 +217,15 @@ export async function POST(request) {
       { status: 201 }
     );
   } catch (error) {
+    // M1.4 — race-safe duplicate handling: the pre-check above normally
+    // returns 409, but a concurrent create can still hit the unique email
+    // constraint; map P2002 to the same 409 response.
+    if (error?.code === 'P2002') {
+      return NextResponse.json(
+        { error: 'A patient with this contact number already exists' },
+        { status: 409 }
+      );
+    }
     console.error("POST /api/patients error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
@@ -278,6 +316,34 @@ export async function PUT(req) {
       );
     }
 
+    // M1.4 — field length caps before any DB access.
+    if (
+      (typeof fullName === 'string' && fullName.length > 200) ||
+      (typeof contact === 'string' && contact.length > 20) ||
+      (typeof medicalHistory === 'string' && medicalHistory.length > 2000) ||
+      (typeof gender === 'string' && gender.length > 30) ||
+      (typeof dateOfBirth === 'string' && dateOfBirth.length > 20)
+    ) {
+      return NextResponse.json(
+        { error: 'Input field exceeds maximum allowed length' },
+        { status: 400 }
+      );
+    }
+
+    // M1.4 — object-type guard: only PATIENT accounts may be updated through
+    // this endpoint. Foreign/nonexistent targets resolve to 404 instead of a
+    // generic 500 (P2025 from the profile update).
+    const target = await prisma.user.findUnique({
+      where: { id: patientId },
+      select: { role: true },
+    });
+    if (!target || target.role !== 'PATIENT') {
+      return NextResponse.json(
+        { error: 'Patient not found' },
+        { status: 404 }
+      );
+    }
+
     const updated = await prisma.patientProfile.update({
       where: { userId: patientId },
       data: {
@@ -292,6 +358,13 @@ export async function PUT(req) {
 
     return NextResponse.json({ success: true, profile: updated });
   } catch (err) {
+    // M1.4 — a missing PatientProfile row would otherwise surface as P2025.
+    if (err?.code === 'P2025') {
+      return NextResponse.json(
+        { error: 'Patient not found' },
+        { status: 404 }
+      );
+    }
     console.error('PUT patient error:', err);
     return NextResponse.json(
       { error: 'Internal server error' },

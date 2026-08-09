@@ -4,6 +4,31 @@ import { requireAuth, requireRole } from '@/app/lib/authHelpers';
 
 export const runtime = 'nodejs';
 
+// ── M1.4 — minimal input-validation helpers (POST booking only) ─────────────
+function isValidDateOnly(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+function isPastDate(s) {
+  const today = new Date();
+  const todayStr =
+    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  return s < todayStr;
+}
+
+// Accepts the clinic's 12-hour slots ("10:00 AM") as well as 24-hour
+// ("14:30"); rejects anything else, with a hard length cap.
+const TIME_SLOT_RE = /^([01]?\d|2[0-3]):[0-5]\d(\s?(AM|PM))?$/i;
+
+function isValidTimeSlot(s) {
+  if (typeof s !== 'string' || s.length > 16) return false;
+  return TIME_SLOT_RE.test(s.trim());
+}
+
 export async function GET(req) {
   try {
     const { payload, errorResponse } = await requireAuth(req);
@@ -123,6 +148,28 @@ export async function POST(req) {
     if (!doctorId || !appointmentDate || !timeSlot) {
       return NextResponse.json(
         { error: 'Please select a doctor, date and time slot.' },
+        { status: 400 }
+      );
+    }
+
+    // M1.4 — minimal input validation (appointmentDate / timeSlot only).
+    // All checks run before any database write; slot/doctor business logic,
+    // transactions and response contracts are unchanged.
+    if (!isValidDateOnly(appointmentDate)) {
+      return NextResponse.json(
+        { error: 'Appointment date must be a valid date in YYYY-MM-DD format' },
+        { status: 400 }
+      );
+    }
+    if (isPastDate(appointmentDate)) {
+      return NextResponse.json(
+        { error: 'Appointment date cannot be in the past' },
+        { status: 400 }
+      );
+    }
+    if (!isValidTimeSlot(timeSlot)) {
+      return NextResponse.json(
+        { error: 'Invalid time slot. Expected format like "10:00 AM".' },
         { status: 400 }
       );
     }

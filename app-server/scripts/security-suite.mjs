@@ -102,6 +102,13 @@ async function signTestToken(claims, expiresInSeconds, secretOverride) {
 
 const randomId = () => 'c' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 
+// M1.4 — appointment booking dates are computed relative to "now" so the
+// suite stays runnable indefinitely (the appointments route now rejects past
+// dates). futureDate is always a valid future booking date; pastDate is
+// always in the past.
+const futureDate = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+const pastDate = new Date(Date.now() - 10 * 86400000).toISOString().split('T')[0];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // A. ANONYMOUS MATRIX
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,10 +209,10 @@ record('SETUP mass-assignment patient created as PATIENT (role not elevated)', s
 // discoverable through the booking dropdown endpoint, as the UI does).
 const realDocId = (await api('/api/appointments?doctors=true', { cookie: patientA.cookie }))
   .data?.doctors?.find((d) => d.email === 'doctor@aarogyam.local')?.id || null;
-const slotA = await api('/api/appointments', { method: 'POST', cookie: patientA.cookie, body: { doctorId: doctor2Id, appointmentDate: '2026-09-01', timeSlot: '10:00 AM' } });
+const slotA = await api('/api/appointments', { method: 'POST', cookie: patientA.cookie, body: { doctorId: doctor2Id, appointmentDate: futureDate, timeSlot: '10:00 AM' } });
 const apptAId = slotA.data?.appointment?.id;
 record('SETUP Patient A books with Doctor 2 -> 201', slotA.status === 201 && !!apptAId, [201, true], [slotA.status, !!apptAId]);
-const slotB = await api('/api/appointments', { method: 'POST', cookie: patientB.cookie, body: { doctorId: realDocId, appointmentDate: '2026-09-01', timeSlot: '11:00 AM' } });
+const slotB = await api('/api/appointments', { method: 'POST', cookie: patientB.cookie, body: { doctorId: realDocId, appointmentDate: futureDate, timeSlot: '11:00 AM' } });
 const apptBId = slotB.data?.appointment?.id;
 record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!apptBId, [201, true], [slotB.status, !!apptBId]);
 
@@ -401,7 +408,7 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
 // F. APPOINTMENT OWNERSHIP
 // ─────────────────────────────────────────────────────────────────────────────
 {
-  const dup = await api('/api/appointments', { method: 'POST', cookie: patientB.cookie, body: { doctorId: realDocId, appointmentDate: '2026-09-01', timeSlot: '11:00 AM' } });
+  const dup = await api('/api/appointments', { method: 'POST', cookie: patientB.cookie, body: { doctorId: realDocId, appointmentDate: futureDate, timeSlot: '11:00 AM' } });
   record('APP duplicate slot booking -> 409', dup.status === 409, 409, dup.status);
 
   const list = await api('/api/appointments', { cookie: patientA.cookie });
@@ -528,6 +535,67 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
   if (h1.data?.patient?.id) {
     await api('/api/patients', { method: 'DELETE', token: doctor.token, body: { patientId: h1.data.patient.id } });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// K. M1.4 HARDENING — input validation & auth-refresh defense-in-depth
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // Refresh identity contract — malformed claims must not be re-signed
+  const r1 = await api('/api/auth/refresh', { method: 'POST', token: await signTestToken({ email: 'x@x.com', role: 'PATIENT' }, 3600) });
+  record('M14 REFRESH token missing id -> 401', r1.status === 401, 401, r1.status);
+  const r2 = await api('/api/auth/refresh', { method: 'POST', token: await signTestToken({ id: paId, email: 'x@x.com' }, 3600) });
+  record('M14 REFRESH token missing role -> 401', r2.status === 401, 401, r2.status);
+  const r3 = await api('/api/auth/refresh', { method: 'POST', token: await signTestToken({ id: paId, email: 'x@x.com', role: 'ADMIN' }, 3600) });
+  record('M14 REFRESH token invalid role -> 401', r3.status === 401, 401, r3.status);
+  const r4 = await api('/api/auth/refresh', { method: 'POST', token: await signTestToken({ id: paId, email: 'patient_a_sec@aarogyam.local', role: 'PATIENT' }, 3600) });
+  record('M14 REFRESH valid claims -> 200 new token', r4.status === 200 && typeof r4.data?.token === 'string', 200, r4.status);
+
+  // Appointment POST — appointmentDate / timeSlot validation
+  const book = (overrides) => api('/api/appointments', {
+    method: 'POST', cookie: patientA.cookie,
+    body: { doctorId: doctor2Id, appointmentDate: futureDate, timeSlot: '10:00 AM', ...overrides },
+  });
+  const b1 = await book({ appointmentDate: '2026-13-45' });
+  record('M14 APPT malformed date -> 400', b1.status === 400, 400, b1.status);
+  const b2 = await book({ appointmentDate: pastDate });
+  record('M14 APPT past date -> 400', b2.status === 400, 400, b2.status);
+  const b3 = await book({ timeSlot: '25:99 XX' });
+  record('M14 APPT invalid timeSlot format -> 400', b3.status === 400, 400, b3.status);
+  const b4 = await book({ timeSlot: 'A'.repeat(50) });
+  record('M14 APPT oversized timeSlot -> 400', b4.status === 400, 400, b4.status);
+
+  // Consultation POST — vitals validation
+  const consult = (overrides) => api('/api/consultation', {
+    method: 'POST', token: doctor.token,
+    body: { patientId: paId, consultationDate: '2026-08-09', symptoms: 'Cough', diagnosis: 'X',
+      bloodPressure: '120/80', heartRate: '80', temperature: '98.6', spo2: '98', weight: '65', respiratoryRate: '16',
+      ...overrides },
+  });
+  const c1 = await consult({ bloodPressure: 'abc/def' });
+  record('M14 CONSULT invalid bloodPressure -> 400', c1.status === 400, 400, c1.status);
+  const c2 = await consult({ heartRate: 'abc' });
+  record('M14 CONSULT non-numeric heartRate -> 400', c2.status === 400, 400, c2.status);
+  const c3 = await consult({ temperature: '999' });
+  record('M14 CONSULT out-of-range temperature -> 400', c3.status === 400, 400, c3.status);
+  const c4 = await consult({});
+  record('M14 CONSULT valid vitals still accepted -> 201', c4.status === 201, 201, c4.status);
+
+  // PUT /api/patients — foreign / non-patient target -> 404 (was generic 500)
+  const p1 = await api('/api/patients', { method: 'PUT', token: doctor.token, body: { patientId: doctor2Id, fullName: 'X', contact: '9000000011' } });
+  record('M14 PUT patient with staff id -> 404', p1.status === 404, 404, p1.status);
+  const p2 = await api('/api/patients', { method: 'PUT', token: doctor.token, body: { patientId: randomId(), fullName: 'X', contact: '9000000011' } });
+  record('M14 PUT patient nonexistent id -> 404', p2.status === 404, 404, p2.status);
+
+  // Duplicate email / invalid email format
+  const d1 = await api('/api/patients', { method: 'POST', token: doctor.token, body: mkPatient('patient_a_sec@aarogyam.local', 'Dup Email', '9000000077') });
+  record('M14 POST patient duplicate email -> 409', d1.status === 409, 409, d1.status);
+  const d2 = await api('/api/staff', { method: 'POST', token: doctor.token, body: { email: 'doctor@aarogyam.local', password: 'Test@1234', role: 'DOCTOR' } });
+  record('M14 POST staff duplicate email -> 409', d2.status === 409, 409, d2.status);
+  const d3 = await api('/api/patients', { method: 'POST', token: doctor.token, body: mkPatient('not-an-email', 'Bad Email', '9000000076') });
+  record('M14 POST patient invalid email -> 400', d3.status === 400, 400, d3.status);
+  const d4 = await api('/api/staff', { method: 'POST', token: doctor.token, body: { email: '   ', password: 'Test@1234', role: 'DOCTOR' } });
+  record('M14 POST staff whitespace User ID -> 400', d4.status === 400, 400, d4.status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
