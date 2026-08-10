@@ -3,6 +3,13 @@ import { verifyToken, signToken } from '@/app/api/lib/jwt';
 // Alias avoids clashing with this file's own `export const config` (matcher).
 import { config as appConfig } from '@/app/lib/config/index.mjs';
 
+// M1.5-F1 — F-1 identity-contract constants (mirrors authHelpers.js and
+// POST /api/auth/refresh). A token may only be re-signed (sliding session)
+// when it carries a non-empty string id, a non-empty string email and a
+// legitimate role.
+const F1_VALID_ROLES = ['DOCTOR', 'COMPOUNDER', 'PATIENT'];
+const isNonEmptyString = (v) => typeof v === 'string' && v.trim().length > 0;
+
 export async function middleware(req) {
   const { pathname } = req.nextUrl;
   
@@ -80,14 +87,29 @@ export async function middleware(req) {
     const thresholdSeconds = thresholdMinutes * 60;
     
     if (timeRemaining <= thresholdSeconds) {
-      const idleMinutes = appConfig.session.idleTimeoutMinutes;
-      const newPayload = { id: payload.id, email: payload.email, role: payload.role };
-      const newToken = await signToken(newPayload);
-      
-      response.cookies.set(appConfig.session.cookieName, newToken, {
-        ...appConfig.session.refreshCookie,
-        maxAge: idleMinutes * 60,
-      });
+      // M1.5-F1 — never re-sign a token whose claims violate the F-1
+      // identity contract. A cryptographically valid but claim-less token is
+      // not extended; the request still proceeds with its existing verified
+      // token and route-level F-1 rejects the malformed identity (no new
+      // error contract introduced here).
+      const claimsValid =
+        isNonEmptyString(payload.id) &&
+        isNonEmptyString(payload.email) &&
+        F1_VALID_ROLES.includes(payload.role);
+
+      if (claimsValid) {
+        const idleMinutes = appConfig.session.idleTimeoutMinutes;
+        const newPayload = { id: payload.id, email: payload.email, role: payload.role };
+        const newToken = await signToken(newPayload);
+
+        // M1.5-F5 — use the same cookie attributes as login/logout so the
+        // sliding re-issue shares one unified cookie contract (previously
+        // this path used a separate 'strict' SameSite profile).
+        response.cookies.set(appConfig.session.cookieName, newToken, {
+          ...appConfig.session.cookie,
+          maxAge: idleMinutes * 60,
+        });
+      }
     }
 
     return response;

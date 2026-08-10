@@ -16,9 +16,15 @@ export default function SessionGuard({ children }) {
       if (response.status === 401) {
         const currentPath = window.location.pathname;
         if (currentPath !== '/login') {
-          // Evict stored credentials
-          document.cookie =
-            'aarogyam_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          // M1.5-F5 — evict the session through the server-side logout
+          // endpoint. The authentication cookie is HttpOnly and cannot be
+          // reliably cleared with document.cookie; the server clears it with
+          // the exact attributes used by login.
+          try {
+            await fetch('/api/auth/logout', { method: 'POST' });
+          } catch {
+            // Best-effort — redirect regardless of the eviction result.
+          }
 
           // Redirect to login
           window.location.href = '/login?message=expired';

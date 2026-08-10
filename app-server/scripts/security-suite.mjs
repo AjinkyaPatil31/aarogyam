@@ -21,7 +21,7 @@
  *  Run:  node scripts/security-suite.mjs     (or  npm run test:security)
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SignJWT } from 'jose';
@@ -596,6 +596,244 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
   record('M14 POST patient invalid email -> 400', d3.status === 400, 400, d3.status);
   const d4 = await api('/api/staff', { method: 'POST', token: doctor.token, body: { email: '   ', password: 'Test@1234', role: 'DOCTOR' } });
   record('M14 POST staff whitespace User ID -> 400', d4.status === 400, 400, d4.status);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L. M1.5 PHASE 1 — middleware F-1 sliding re-sign, server logout, login throttle
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // F1 — a claim-less / malformed-role token near the sliding threshold must
+  // NOT be re-signed by middleware (no Set-Cookie on the response) and must
+  // still be rejected by route-level F-1 (401). A valid near-threshold token
+  // IS re-signed (Set-Cookie present) and succeeds — proving the sliding
+  // behavior itself is preserved.
+  const nearThreshold = 14 * 60; // 840s remaining < 900s refresh threshold
+
+  const bad1 = await api('/api/prescriptions', { token: await signTestToken({ email: 'x@x.com', role: 'PATIENT' }, nearThreshold) });
+  record('M15 F1 claim-less id near-threshold -> 401, NOT re-signed', bad1.status === 401 && !bad1.headers.get('set-cookie'), [401, 'no-set-cookie'], [bad1.status, !!bad1.headers.get('set-cookie')]);
+  const bad2 = await api('/api/prescriptions', { token: await signTestToken({ id: paId, email: 'x@x.com', role: 'ADMIN' }, nearThreshold) });
+  record('M15 F1 invalid role near-threshold -> 401, NOT re-signed', bad2.status === 401 && !bad2.headers.get('set-cookie'), [401, 'no-set-cookie'], [bad2.status, !!bad2.headers.get('set-cookie')]);
+  const good = await api('/api/prescriptions', { token: await signTestToken({ id: paId, email: 'patient_a_sec@aarogyam.local', role: 'PATIENT' }, nearThreshold) });
+  record('M15 F1 valid claims near-threshold -> 200 + sliding Set-Cookie', good.status === 200 && !!good.headers.get('set-cookie'), [200, true], [good.status, !!good.headers.get('set-cookie')]);
+
+  // F5 — logout through the server endpoint clears the auth cookie
+  const lc = await login('patient_c_sec@aarogyam.local', 'Test@1234');
+  const out = await api('/api/auth/logout', { method: 'POST', cookie: lc.cookie });
+  const outCookie = out.headers.get('set-cookie') || '';
+  record('M15 F5 server logout -> 200 with cleared cookie (Max-Age=0)', out.status === 200 && /max-age=0/i.test(outCookie), [200, 'cleared'], [out.status, outCookie]);
+  const afterOut = await api('/api/prescriptions', { cookie: 'aarogyam_token=' });
+  record('M15 F5 post-logout protected request -> 401', afterOut.status === 401, 401, afterOut.status);
+
+  // F4 — throttle failed attempts per normalized User ID. Generic 401 before
+  // the threshold, generic 429 after it, no global lockout, and a valid login
+  // succeeds once the cooldown has elapsed.
+  const throttledEmail = 'patient_a_sec@aarogyam.local';
+  const f4Statuses = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await api('/api/auth', { method: 'POST', body: { action: 'login', email: throttledEmail, password: 'WrongPass!' } });
+    f4Statuses.push(r.status);
+  }
+  record('M15 F4 five rapid failures -> 401 generic each (no existence leak)', f4Statuses.every((s) => s === 401), [401, 401, 401, 401, 401], f4Statuses);
+  const locked = await api('/api/auth', { method: 'POST', body: { action: 'login', email: throttledEmail, password: 'WrongPass!' } });
+  record('M15 F4 sixth attempt -> 429', locked.status === 429 && locked.data?.error === 'Too many login attempts. Please try again later.', 429, locked.status);
+  const stillLocked = await api('/api/auth', { method: 'POST', body: { action: 'login', email: throttledEmail, password: 'WrongPass!' } });
+  record('M15 F4 repeated attempt while locked -> 429', stillLocked.status === 429, 429, stillLocked.status);
+  const otherLogin = await api('/api/auth', { method: 'POST', body: { action: 'login', email: 'doctor@aarogyam.local', password: 'Doctor@123' } });
+  record('M15 F4 different account login unaffected -> 200 (no global lockout)', otherLogin.status === 200, 200, otherLogin.status);
+  // Cooldown is 10s — wait for it to elapse, then the correct password works.
+  await new Promise((resolve) => setTimeout(resolve, 11000));
+  const afterCooldown = await api('/api/auth', { method: 'POST', body: { action: 'login', email: throttledEmail, password: 'Test@1234' } });
+  record('M15 F4 valid login succeeds after cooldown -> 200', afterCooldown.status === 200, 200, afterCooldown.status);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M. M1.5 PHASE 2 — profile write-path validation (F2), staff/account basic
+//     coverage, share input caps + provider-error sanitization (F3)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // ── F2 — POST /api/patients/profile validation-before-write ordering ──
+  // Every invalid request below embeds a profile modification; each must fail
+  // WITHOUT mutating the patient's profile. The baseline is captured once and
+  // re-fetched after every failure to prove no write occurred.
+  // NOTE: patientA.cookie is the SETUP-era token; it stays valid because this
+  // milestone intentionally has no server-side JWT revocation (the section-H
+  // logout test only clears the client cookie).
+  const getProfile = () => api('/api/patients/profile', { cookie: patientA.cookie });
+  const profileFields = (p) => ({
+    fullName: p?.fullName, dateOfBirth: p?.dateOfBirth, gender: p?.gender, contact: p?.contact,
+  });
+  const baseline = profileFields((await getProfile()).data?.profile);
+  const sameReq = {
+    fullName: baseline.fullName, dateOfBirth: baseline.dateOfBirth,
+    gender: baseline.gender, contact: baseline.contact,
+  };
+  const unchanged = (p) => JSON.stringify(profileFields(p)) === JSON.stringify(baseline);
+
+  const f2a = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, fullName: 'HACKED NAME', newPassword: 'NewPass@123' } });
+  const f2aAfter = (await getProfile()).data?.profile;
+  record('M15-F2 missing currentPassword -> 400, profile unchanged',
+    f2a.status === 400 && f2a.data?.error === 'Current password is required to set a new password' && unchanged(f2aAfter),
+    [400, 'unchanged'], [f2a.status, unchanged(f2aAfter)]);
+
+  const f2b = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, fullName: 'HACKED NAME', newPassword: 'NewPass@123', currentPassword: 'WrongPass!' } });
+  const f2bAfter = (await getProfile()).data?.profile;
+  record('M15-F2 wrong currentPassword -> 401, profile unchanged',
+    f2b.status === 401 && f2b.data?.error === 'Current password is incorrect' && unchanged(f2bAfter),
+    [401, 'unchanged'], [f2b.status, unchanged(f2bAfter)]);
+
+  const f2c = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, fullName: 'A'.repeat(201) } });
+  const f2cAfter = (await getProfile()).data?.profile;
+  record('M15-F2 oversized fullName -> 400, no DB mutation',
+    f2c.status === 400 && unchanged(f2cAfter), [400, 'no-mutation'], [f2c.status, unchanged(f2cAfter)]);
+
+  const f2d = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, contact: '9'.repeat(21) } });
+  const f2dAfter = (await getProfile()).data?.profile;
+  record('M15-F2 oversized contact -> 400, no DB mutation',
+    f2d.status === 400 && unchanged(f2dAfter), [400, 'no-mutation'], [f2d.status, unchanged(f2dAfter)]);
+
+  const f2e = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, contact: '12345' } });
+  const f2eAfter = (await getProfile()).data?.profile;
+  record('M15-F2 invalid contact format -> 400, no DB mutation',
+    f2e.status === 400 && f2e.data?.error === 'Contact number must be exactly 10 digits' && unchanged(f2eAfter),
+    [400, 'no-mutation'], [f2e.status, unchanged(f2eAfter)]);
+
+  const f2f = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, newPassword: 'A'.repeat(129), currentPassword: 'Test@1234' } });
+  const f2fAfter = (await getProfile()).data?.profile;
+  record('M15-F2 oversized password -> 400, no DB mutation',
+    f2f.status === 400 && unchanged(f2fAfter), [400, 'no-mutation'], [f2f.status, unchanged(f2fAfter)]);
+
+  const f2g = await api('/api/patients/profile', { method: 'POST', cookie: patientA.cookie, body: { ...sameReq, fullName: 'Sec Patient A (Updated)' } });
+  const f2gAfter = (await getProfile()).data?.profile;
+  record('M15-F2 valid profile update -> 200 + persisted (happy path preserved)',
+    f2g.status === 200 && f2gAfter?.fullName === 'Sec Patient A (Updated)' && f2gAfter?.profileComplete === true,
+    ['200', 'persisted'], [f2g.status, f2gAfter?.fullName]);
+
+  // ── B. PUT /api/staff/account basic coverage (audit gap: zero coverage) ──
+  const acct = (body, token) => api('/api/staff/account', { method: 'PUT', token: token || null, body });
+  const n1 = await acct({ currentPassword: 'x', newPassword: 'Doctor2@123x' });
+  record('M15-F2 staff/account PUT anonymous -> 401', n1.status === 401, 401, n1.status);
+
+  const d2c = await login('doctor2_sec@aarogyam.local', 'Doctor2@123');
+  const w1 = await acct({ currentPassword: 'WrongPass!', newPassword: 'Doctor2@123x' }, d2c.token);
+  const w1Check = await login('doctor2_sec@aarogyam.local', 'Doctor2@123');
+  record('M15-F2 staff/account wrong current password -> 401, password unchanged',
+    w1.status === 401 && w1Check.status === 200, [401, 'unchanged'], [w1.status, w1Check.status]);
+
+  const v1 = await acct({ currentPassword: 'Doctor2@123', newPassword: 'Doctor2@123x' }, d2c.token);
+  record('M15-F2 staff/account valid password update -> 200 passwordChanged',
+    v1.status === 200 && v1.data?.passwordChanged === true, [200, true], [v1.status, v1.data?.passwordChanged]);
+  const v2 = await acct({ currentPassword: 'Doctor2@123x', newPassword: 'Doctor2@123' }, d2c.token);
+  record('M15-F2 staff/account restore original password -> 200',
+    v2.status === 200 && v2.data?.passwordChanged === true, [200, true], [v2.status, v2.data?.passwordChanged]);
+
+  // Ownership binding — the route writes only the authenticated user's own
+  // account (payload.id). An attempt addressed at another account via an
+  // injected newEmail executes against the caller's own account and must
+  // leave the other account untouched.
+  const own1 = await acct({ currentPassword: 'Doctor2@123', newEmail: 'doctor2_moved@aarogyam.local' }, d2c.token);
+  const docStill = await login('doctor@aarogyam.local', 'Doctor@123');
+  record('M15-F2 staff/account ownership: rename runs on own account -> 200, doctor untouched',
+    own1.status === 200 && docStill.status === 200, [200, 'doctor-ok'], [own1.status, docStill.status]);
+  const own2 = await acct({ currentPassword: 'Doctor2@123', newEmail: 'doctor2_sec@aarogyam.local' }, d2c.token);
+  record('M15-F2 staff/account ownership: restore own User ID -> 200', own2.status === 200, 200, own2.status);
+
+  // ── C. Share — input caps + provider-error sanitization (F3) ──
+  const share = (body, token) => api('/api/share', { method: 'POST', token: token || doctor.token, body });
+
+  const s1 = await share({ phone: '9000000000', message: 'A'.repeat(5001) });
+  record('M15-F3 oversized message -> 400', s1.status === 400 && s1.data?.error === 'message exceeds maximum allowed length', [400, 'length'], [s1.status, s1.data?.error]);
+  const s2 = await share({ phone: '9'.repeat(21), message: 'test' });
+  record('M15-F3 oversized phone -> 400', s2.status === 400 && s2.data?.error === 'phone exceeds maximum allowed length', [400, 'length'], [s2.status, s2.data?.error]);
+  const s3 = await share({ phone: 9000000000, message: 'test' });
+  record('M15-F3 non-string phone -> 400 (type check)', s3.status === 400, 400, s3.status);
+  const s4 = await share({ phone: '9000000000', message: 12345 });
+  record('M15-F3 non-string message -> 400 (type check)', s4.status === 400, 400, s4.status);
+  const s5 = await share({ phone: '   ', message: 'test' });
+  record('M15-F3 whitespace-only phone -> 400', s5.status === 400, 400, s5.status);
+
+  // Provider error path — stage the webjs provider's real 'Queue is full'
+  // failure by filling the queue file with unsent entries, then verify the
+  // client response is fully generic: no waError.message, no twilioCode, no
+  // twilioMoreInfo, no provider internals. 1000 entries comfortably exceeds
+  // the default maxSize (500) and still satisfies the provider's
+  // length >= maxSize && unsent >= maxSize check for any realistic cap.
+  // The queue file is restored to its prior state afterwards.
+  const queuePath = join(ROOT, 'wa-queue.json');
+  const queueBefore = existsSync(queuePath) ? readFileSync(queuePath, 'utf8') : null;
+  try {
+    const fullQueue = Array.from({ length: 1000 }, (_, i) => ({
+      id: `sec-suite-${i}`, phone: '9000000000', message: 'x',
+      createdAt: new Date().toISOString(), sent: false,
+    }));
+    writeFileSync(queuePath, JSON.stringify(fullQueue));
+    const s6 = await share({ phone: '9000000000', message: 'test' });
+    const s6Body = JSON.stringify(s6.data || {});
+    record('M15-F3 provider failure -> generic error, NO provider details leaked',
+      s6.status >= 500 &&
+      s6.data?.error === 'WhatsApp delivery failed. Please try again later.' &&
+      !('twilioCode' in (s6.data || {})) &&
+      !('twilioMoreInfo' in (s6.data || {})) &&
+      !/queue is full|twilio|more_info|errorCode/i.test(s6Body),
+      ['5xx', 'generic-no-leak'], [s6.status, s6Body.slice(0, 120)]);
+  } finally {
+    if (queueBefore === null) {
+      try { unlinkSync(queuePath); } catch { /* absent */ }
+    } else {
+      writeFileSync(queuePath, queueBefore);
+    }
+  }
+
+  const s7 = await share({ phone: '9000000000', message: 'Test share message' });
+  record('M15-F3 authorized share -> 200 queued (contract preserved)',
+    s7.status === 200 && s7.data?.queued === true, [200, true], [s7.status, s7.data?.queued]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// N. M1.5 PHASE 3 — final coverage closure (test-only; no production changes)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // 1. GET /api/patients?self=true for a STAFF identity — documented 404
+  //    contract; must never return patient data.
+  const st1 = await api('/api/patients?self=true', { token: doctor.token });
+  record('M15-P3 doctor self=true -> 404, no patient data',
+    st1.status === 404 && !('patient' in (st1.data || {})) && !Array.isArray(st1.data?.patients),
+    [404, 'no-data'], [st1.status, Object.keys(st1.data || {})]);
+  const st2 = await api('/api/patients?self=true', { token: compounder.token });
+  record('M15-P3 compounder self=true -> 404, no patient data',
+    st2.status === 404 && !('patient' in (st2.data || {})),
+    [404, 'no-data'], [st2.status, Object.keys(st2.data || {})]);
+  const st3 = await api('/api/patients?self=true', { cookie: patientA.cookie });
+  record('M15-P3 patient self=true -> 200 own profile, NO passwordHash (preserved)',
+    st3.status === 200 && st3.data?.patient?.id === paId && !('passwordHash' in (st3.data?.patient || {})),
+    [200, 'own-no-hash'], [st3.status, st3.data?.patient?.id]);
+
+  // 2. Guard/P2025-style 404 boundaries — the remaining untested
+  //    patient/staff DELETE paths (PUT /api/patients 404s are already
+  //    covered in M14; both DELETE routes share the same guard -> 404
+  //    contract as the P2025-mapped PUT path).
+  const d1 = await api('/api/patients', { method: 'DELETE', token: doctor.token, body: { patientId: randomId() } });
+  record('M15-P3 DELETE patient nonexistent id -> 404', d1.status === 404, 404, d1.status);
+  const d2 = await api('/api/staff', { method: 'DELETE', token: doctor.token, body: { userId: randomId() } });
+  record('M15-P3 DELETE staff nonexistent id -> 404', d2.status === 404, 404, d2.status);
+
+  // 3. Drugs LIKE-wildcard behavior — classified INFO by the audit (SQLite
+  //    LIKE semantics, NOT injection). Coverage verifies only that the
+  //    existing take:10 bound holds. Single-char queries short-circuit at
+  //    the min-2-char gate, so 2-char wildcards exercise the LIKE path.
+  const w1 = await api('/api/drugs?q=%%', { token: doctor.token });
+  record('M15-P3 drugs q=%% -> 200, bounded <= 10 results',
+    w1.status === 200 && Array.isArray(w1.data?.drugs) && w1.data.drugs.length <= 10,
+    [200, '<=10'], [w1.status, w1.data?.drugs?.length]);
+  const w2 = await api('/api/drugs?q=__', { token: doctor.token });
+  record('M15-P3 drugs q=__ -> 200, bounded <= 10 results',
+    w2.status === 200 && Array.isArray(w2.data?.drugs) && w2.data.drugs.length <= 10,
+    [200, '<=10'], [w2.status, w2.data?.drugs?.length]);
+
+  // 4. F2 companion — POST /api/patients/profile role boundary (PATIENT only)
+  const p1 = await api('/api/patients/profile', { method: 'POST', token: doctor.token, body: { fullName: 'X', dateOfBirth: '1990-01-01', gender: 'Male', contact: '9000000000' } });
+  record('M15-P3 doctor POST /api/patients/profile -> 403', p1.status === 403, 403, p1.status);
+  const p2 = await api('/api/patients/profile', { method: 'POST', token: compounder.token, body: { fullName: 'X', dateOfBirth: '1990-01-01', gender: 'Male', contact: '9000000000' } });
+  record('M15-P3 compounder POST /api/patients/profile -> 403', p2.status === 403, 403, p2.status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

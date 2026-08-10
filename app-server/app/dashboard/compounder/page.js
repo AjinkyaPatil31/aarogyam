@@ -6,8 +6,14 @@ import { useRouter } from "next/navigation";
 /* ──────────────────────────────────────────────────────────────────────────────
    Sign Out helper
    ──────────────────────────────────────────────────────────────────────────── */
-function signOut(router) {
-  document.cookie = "aarogyam_token=; path=/; max-age=0; SameSite=Lax";
+async function signOut(router) {
+  // M1.5-F5 — sign out through the server endpoint (the auth cookie is
+  // HttpOnly and cannot be reliably evicted with document.cookie).
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch {
+    // Best-effort — redirect regardless.
+  }
   sessionStorage.removeItem('aarogyam_user_email');
   sessionStorage.removeItem('aarogyam_user_role');
   router.push("/login");
@@ -651,8 +657,12 @@ export default function CompounderDashboard() {
           newPassword: '',
           confirmPassword: ''});
         if (data.emailChanged) {
-          setTimeout(() => {
-            document.cookie = 'aarogyam_token=; Max-Age=0; path=/';
+          setTimeout(async () => {
+            try {
+              await fetch('/api/auth/logout', { method: 'POST' });
+            } catch {
+              // Best-effort — redirect regardless.
+            }
             router.push('/login');
           }, 2500);
         }
