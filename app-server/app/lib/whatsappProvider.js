@@ -56,11 +56,20 @@ async function sendViaTwilio(phone, message) {
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Twilio API Error:', errorData);
+      // M1.6 W-07 — sanitize the server log. Never dump the raw Twilio error
+      // object (it carries provider URLs such as more_info) and never log
+      // twilioMoreInfo. Preserve only safe operational facts (HTTP status,
+      // numeric/string error code and message text).
+      const safeCode = typeof errorData?.code === 'string' || typeof errorData?.code === 'number'
+        ? errorData.code
+        : undefined;
+      console.error(
+        'Twilio API Error (status=' + response.status + (safeCode !== undefined ? ', code=' + safeCode : '') + '): ' +
+        (errorData?.message || 'Provider delivery failed')
+      );
       const err = new Error(errorData.message || 'Provider delivery failed');
       err.status = response.status;
-      err.code = errorData.code;
-      err.twilioMoreInfo = errorData.more_info;
+      err.code = safeCode;
       throw err;
     }
 

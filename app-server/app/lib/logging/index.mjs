@@ -107,15 +107,70 @@ function errorMeta(err) {
  */
 function sanitizeContext(value) {
   if (value === null || value === undefined || typeof value !== 'object') return value;
+  let safe;
   try {
-    return JSON.parse(JSON.stringify(value));
+    safe = JSON.parse(JSON.stringify(value));
   } catch {
     const out = {};
     for (const [k, v] of Object.entries(value)) {
       if (v === null || (typeof v !== 'object' && typeof v !== 'function')) out[k] = v;
     }
-    return out;
+    return redactValue(out);
   }
+  return redactValue(safe);
+}
+
+// ── W-06 (M1.6 Phase B) — sensitive-field redaction ───────────────────────
+// Every structured `context` (including the argN fallback bag) passes
+// through key-name redaction at entry creation. Values under sensitive key
+// names are replaced with REDACTED_MARKER so passwords, tokens, cookies,
+// authorization headers, provider credentials and message bodies can never
+// reach the console/file sinks — even when a caller accidentally passes
+// them. Redaction is key-name based and applied recursively (arrays and
+// nested objects); values embedded in free-form `message`/`error` text are
+// the caller's responsibility (the W-07 provider boundary is already
+// sanitized upstream).
+export const REDACTED_MARKER = '[REDACTED]';
+
+/** Key-name fragments that mark a field as sensitive (case-insensitive). */
+const SENSITIVE_KEY_FRAGMENTS = Object.freeze([
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+  'token',
+  'jwt',
+  'cookie',
+  'authorization',
+  'credential',
+  'apikey',
+  'api_key',
+  'accountsid',
+  'authtoken',
+  'auth_token',
+  'fromnumber',
+  'privatekey',
+  'private_key',
+  'requestbody',
+  'messagebody',
+  'whatsappbody',
+  'body',
+]);
+
+function isSensitiveKey(key) {
+  const lower = String(key).toLowerCase();
+  return SENSITIVE_KEY_FRAGMENTS.some((fragment) => lower.includes(fragment));
+}
+
+/** Recursively replace sensitive values with the redaction marker. */
+function redactValue(value) {
+  if (value === null || value === undefined || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((item) => redactValue(item));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = isSensitiveKey(k) ? REDACTED_MARKER : redactValue(v);
+  }
+  return out;
 }
 
 /** Normalize the variadic arguments of a log call into an entry. */

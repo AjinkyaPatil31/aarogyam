@@ -837,6 +837,549 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// O. M1.6 PHASE A — health API (W-02), Prisma durability (W-05),
+//     Twilio server-log sanitization (W-07)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  // ── W-02 — GET /api/health access policy + information boundary ──
+  const ha = await api('/api/health');
+  record('M16-A health anonymous -> 401 (not public)', ha.status === 401, 401, ha.status);
+
+  const hd = await api('/api/health', { token: doctor.token });
+  const hdBody = JSON.stringify(hd.data || {});
+  const hdOk = hd.status === 200 &&
+    typeof hd.data?.overall === 'string' &&
+    typeof hd.data?.database === 'object' &&
+    Array.isArray(hd.data?.checks);
+  record('M16-A health authenticated doctor -> 200 with overall/database/checks',
+    hdOk, ['200', 'shape'], [hd.status, hd.data && Object.keys(hd.data)]);
+
+  // No secrets, raw environment values, stack traces, Prisma internals or
+  // absolute filesystem paths may cross the health boundary.
+  const hp = await api('/api/health', { cookie: patientA.cookie });
+  const hpBody = JSON.stringify(hp.data || {});
+  const jwtSecret = loadJwtSecret();
+  const noSecrets = !(jwtSecret && hpBody.includes(jwtSecret)) &&
+    !/WA_PROVIDER|TWILIO_|accountSid|authToken|fromNumber|JWT_SECRET/i.test(hpBody) &&
+    !/passwordHash|twilioCode|twilioMoreInfo|DATABASE_URL/i.test(hpBody);
+  const noStack = !/\.\s*at\s+\w+\s*\(|at\s+async\s+\w/i.test(hpBody) &&
+    !/PrismaClientValidationError|PrismaClientKnownRequestError/i.test(hpBody);
+  const noPaths = !/[A-Za-z]:[\\/][^"\\s]*[\\/][^"\\s]*/.test(hpBody) &&
+    !/\/[a-z]+\/app-server\//.test(hpBody);
+  record('M16-A health response exposes NO secrets/env/stack/prisma/paths',
+    hp.status === 200 && noSecrets && noStack && noPaths,
+    ['200', 'no-leaks'], [hp.status, { noSecrets, noStack, noPaths }]);
+
+  // Database health — seeded baseline must be reported as reachable and the
+  // W-05 SQLite durability settings must be in effect on the live store.
+  record('M16-A health database reachable on seeded DB',
+    hd.status === 200 && hd.data?.database?.reachable === true &&
+    hd.data?.database?.status === 'HEALTHY',
+    ['reachable', 'HEALTHY'], [hd.data?.database?.reachable, hd.data?.database?.status]);
+
+  // ── W-05 — Prisma durability pragmas (WAL + busy_timeout) ──
+  record('M16-A SQLite journal_mode=WAL on live database',
+    hd.data?.database?.journalMode === 'WAL', 'WAL', hd.data?.database?.journalMode);
+  record('M16-A SQLite busy_timeout configured (non-zero)',
+    typeof hd.data?.database?.busyTimeoutMs === 'number' && hd.data?.database?.busyTimeoutMs > 0,
+    'non-zero', hd.data?.database?.busyTimeoutMs);
+
+  // Normal authenticated DB operation remains functional after pragma setup.
+  const hq = await api('/api/drugs?q=paracetamol', { token: doctor.token });
+  record('M16-A authenticated DB query after pragma setup -> 200',
+    hq.status === 200 && Array.isArray(hq.data?.drugs), 200, hq.status);
+
+  // ── W-07 — Twilio server-log sanitization (source-level, deterministic) ──
+  // The runtime M15-F3 test above already proves the client-facing response
+  // stays generic. The server log is only ever produced by whatsappProvider's
+  // own console.error, so asserting the source no longer dumps the raw Twilio
+  // error object / twilioMoreInfo proves the log line cannot leak them.
+  const providerSrc = readFileSync(join(ROOT, 'app/lib/whatsappProvider.js'), 'utf8');
+  // Sanitization means the log line no longer dumps the raw Twilio error
+  // object. `twilioMoreInfo` may appear only inside the explanatory comment;
+  // any CODE usage (err.twilioMoreInfo = … assignment) is a failure.
+  record('M16-A provider logs sanitized (no raw errorData / twilioMoreInfo dump)',
+    !/twilioMoreInfo\s*=/.test(providerSrc) &&
+    !/console\.error\s*\(\s*['"]Twilio API Error:['"]\s*,\s*errorData/.test(providerSrc) &&
+    providerSrc.includes('Twilio API Error (status='),
+    ['sanitized', 'status+code+message'], [
+      /twilioMoreInfo\s*=/.test(providerSrc),
+      /console\.error\s*\(\s*['"]Twilio API Error:['"]\s*,\s*errorData/.test(providerSrc),
+      providerSrc.includes('Twilio API Error (status='),
+    ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P. M1.6 PHASE B — bootstrap wiring (W-01), backup CLI (W-03), structured
+//    logging redaction (W-06)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { mkdtempSync, rmSync, readdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { execFileSync } = await import('node:child_process');
+  const { createBootstrapManager } = await import('../app/lib/bootstrap/index.mjs');
+  const { createInstaller } = await import('../app/lib/installer/index.mjs');
+  const {
+    createRegistry,
+    registerInfrastructureServices,
+  } = await import('../app/lib/system/registry.mjs');
+  const { validateConfig } = await import('../app/lib/config/validate.mjs');
+  const { createLogManager, createLogger } = await import('../app/lib/logging/index.mjs');
+
+  // ── W-01 BOOTSTRAP — sandboxed (tmp dirs only, repo untouched) ────────
+  {
+    const sandbox = mkdtempSync(join(tmpdir(), 'aarogyam-boot-'));
+    try {
+      const installer = createInstaller({
+        directories: [join(sandbox, 'data'), join(sandbox, 'logs'), join(sandbox, 'backups')],
+        metadataFile: join(sandbox, 'installation.json'),
+      });
+      const registry = registerInfrastructureServices(createRegistry(), {
+        storageRoot: join(sandbox, 'storage'),
+      });
+      const manager = createBootstrapManager({ installer, registry });
+      const first = await manager.initialize();
+      record('M16-B bootstrap: valid configuration initializes to READY',
+        first.state === 'READY' &&
+          manager.getState() === 'READY' &&
+          first.config.appName === 'Aarogyam' &&
+          Object.keys(first.registry ?? {}).length >= 5,
+        { state: 'READY', services: '>=5' },
+        { state: first.state, services: Object.keys(first.registry ?? {}).length });
+      // Idempotency — a READY bootstrap is left untouched on re-init.
+      const second = await manager.initialize();
+      record('M16-B bootstrap: repeated initialize() is idempotent (stays READY)',
+        second.state === 'READY' && manager.getState() === 'READY',
+        'READY', second.state);
+      await manager.shutdown();
+    } catch (err) {
+      record('M16-B bootstrap: valid configuration initializes to READY', false, 'READY', err.message);
+      record('M16-B bootstrap: repeated initialize() is idempotent (stays READY)', false, 'READY', 'not reached');
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  }
+
+  // W-01 — invalid configuration is rejected safely; the validator echoes
+  // env NAMES only, never secret VALUES.
+  {
+    const env = {
+      JWT_SECRET: 'planted-secret-value-xyz',
+      WA_PROVIDER: 'twilio',
+      TWILIO_ACCOUNT_SID: 'ACplanted-sid-value',
+      TWILIO_AUTH_TOKEN: 'planted-token-value-abc',
+      // TWILIO_WHATSAPP_NUMBER intentionally unset → conditional-required error
+    };
+    let threw = false;
+    let message = '';
+    try {
+      validateConfig(env);
+    } catch (err) {
+      threw = true;
+      message = err.message;
+    }
+    record('M16-B bootstrap: invalid config rejected, secret values never echoed',
+      threw &&
+        message.includes('TWILIO_WHATSAPP_NUMBER') &&
+        !message.includes('planted-secret-value-xyz') &&
+        !message.includes('planted-token-value-abc') &&
+        !message.includes('ACplanted-sid-value'),
+      'throws; env names only',
+      { threw, echoedSecret: /planted-(secret|token)/.test(message) });
+  }
+
+  // W-01 — a bootstrap failure is safe: FAILED state, structured generic
+  // error, and no process-level secret (JWT_SECRET) in the error surface.
+  {
+    const sandbox = mkdtempSync(join(tmpdir(), 'aarogyam-boot-fail-'));
+    try {
+      const failingInstaller = {
+        isInstalled: async () => true,
+        verifyInstallation: async () => ({ ok: true, checks: [] }),
+        checkUpgrade: async () => {
+          throw new Error('simulated bootstrap failure');
+        },
+        install: async () => ({ firstLaunch: false }),
+      };
+      const manager = createBootstrapManager({
+        installer: failingInstaller,
+        registry: createRegistry(),
+      });
+      let error = null;
+      try {
+        await manager.initialize();
+      } catch (err) {
+        error = err;
+      }
+      const secret = process.env.JWT_SECRET || '__unset__';
+      const status = manager.getStatus();
+      record('M16-B bootstrap: failure is safe and exposes no secret values',
+        error !== null &&
+          error.message.includes('simulated bootstrap failure') &&
+          manager.getState() === 'FAILED' &&
+          !error.message.includes(secret) &&
+          !status.errors.some((e) => e.message.includes(secret)),
+        { state: 'FAILED', noSecret: true },
+        {
+          state: manager.getState(),
+          error: error?.message,
+          leaked: status.errors.some((e) => e.message.includes(secret)),
+        });
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  }
+
+  // ── W-03 BACKUP CLI — subprocess, sandboxed (repo untouched) ─────────
+  let backupSandbox = null;
+  let backupId = null;
+  try {
+    backupSandbox = mkdtempSync(join(tmpdir(), 'aarogyam-bk-'));
+    let out = '';
+    try {
+      out = execFileSync(process.execPath, [
+        'scripts/backup.mjs',
+        '--dir', join(backupSandbox, 'backups'),
+        '--database', join(ROOT, 'prisma', 'sqlite.db'),
+        '--json',
+      ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      out = String(err.stdout || '');
+    }
+    const resultLine = out.split('\n').filter((l) => l.startsWith('BACKUP_RESULT ')).pop();
+    let result = null;
+    try {
+      result = JSON.parse(resultLine.slice('BACKUP_RESULT '.length));
+    } catch {
+      /* recorded as failure below */
+    }
+    record('M16-B backup CLI: succeeds against seeded DB (exit 0, integrity OK)',
+      result !== null &&
+        result.ok === true &&
+        result.action === 'backup' &&
+        typeof result.id === 'string' &&
+        result.integrity.ok === true,
+      { action: 'backup', ok: true, integrity: { ok: true } },
+      result ? { ok: result.ok, action: result.action, integrity: result.integrity } : 'no result');
+    backupId = result?.id ?? null;
+
+    // Artifact at the expected location.
+    const backupDirPath = backupId ? join(backupSandbox, 'backups', backupId) : null;
+    record('M16-B backup CLI: artifact created at expected location',
+      backupDirPath !== null &&
+        existsSync(join(backupDirPath, 'manifest.json')) &&
+        existsSync(join(backupDirPath, 'sqlite', 'aarogyam.sqlite')),
+      'manifest.json + sqlite/aarogyam.sqlite', backupDirPath);
+
+    // Verification through the CLI's --verify contract.
+    let verifyOk = false;
+    if (backupId) {
+      let vout = '';
+      try {
+        vout = execFileSync(process.execPath, [
+          'scripts/backup.mjs', '--verify', backupId,
+          '--dir', join(backupSandbox, 'backups'), '--json',
+        ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (err) {
+        vout = String(err.stdout || '');
+      }
+      const vline = vout.split('\n').filter((l) => l.startsWith('BACKUP_RESULT ')).pop();
+      try {
+        const v = JSON.parse(vline.slice('BACKUP_RESULT '.length));
+        verifyOk = v.action === 'verify' && v.ok === true && v.errors === 0;
+      } catch {
+        /* recorded as failure below */
+      }
+    }
+    record('M16-B backup CLI: verification passes integrity checks',
+      verifyOk, 'verify ok, 0 errors', verifyOk);
+
+    // Failure path — a missing database must exit non-zero.
+    let failStatus = null;
+    try {
+      execFileSync(process.execPath, [
+        'scripts/backup.mjs',
+        '--dir', join(backupSandbox, 'fail'),
+        '--database', join(backupSandbox, 'nope.db'),
+        '--json',
+      ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      failStatus = err.status;
+    }
+    record('M16-B backup CLI: missing database fails with non-zero exit',
+      failStatus !== null && failStatus !== 0, 'non-zero', failStatus);
+
+    // Cleanup — remove the sandbox, confirm the repo gained no artifacts.
+    rmSync(backupSandbox, { recursive: true, force: true });
+    backupSandbox = null;
+    const repoBackups = join(ROOT, 'data', 'backups');
+    const repoArtifacts = existsSync(repoBackups) ? readdirSync(repoBackups) : [];
+    record('M16-B backup CLI: test artifacts removed, repo has no backup artifacts',
+      !existsSync(backupSandbox) && repoArtifacts.length === 0,
+      'sandbox removed; data/backups empty',
+      { sandboxGone: !existsSync(backupSandbox), repoArtifacts });
+  } finally {
+    if (backupSandbox) rmSync(backupSandbox, { recursive: true, force: true });
+  }
+
+  // ── W-06 STRUCTURED LOGGING — isolated manager, tmp file sink ────────
+  {
+    const logSandbox = mkdtempSync(join(tmpdir(), 'aarogyam-log-'));
+    const manager = createLogManager({
+      console: { enabled: false },
+      file: { enabled: true, dir: logSandbox, filename: 'test.jsonl' },
+    });
+    manager.initialize();
+    const log = createLogger('phase-b-test', { manager });
+    const readLog = () => readFileSync(join(logSandbox, 'test.jsonl'), 'utf8');
+    try {
+      log.info('phase-b-structured', { component: 'health', duration: 5 });
+      await manager.flush();
+      const raw = readLog();
+      const parsed = JSON.parse(raw.trim().split('\n')[0]);
+      record('M16-B logging: structured record emitted with expected fields',
+        parsed.timestamp &&
+          parsed.level === 'info' &&
+          parsed.module === 'phase-b-test' &&
+          parsed.message === 'phase-b-structured' &&
+          parsed.context.component === 'health',
+        { level: 'info', module: 'phase-b-test' },
+        { level: parsed.level, module: parsed.module });
+
+      log.info('phase-b-secrets', {
+        password: 'S3cret!',
+        jwt: 'aaa.bbb.ccc',
+        authorization: 'Bearer xyz',
+        cookie: 'a=1',
+        authToken: 'tok123',
+        twilioAccountSid: 'AC123',
+        messageBody: 'hello patient',
+      });
+      await manager.flush();
+      const raw2 = readLog();
+      const leaks = ['S3cret!', 'aaa.bbb.ccc', 'Bearer xyz', 'a=1', 'tok123', 'AC123', 'hello patient']
+        .filter((v) => raw2.includes(v));
+      const markers = (raw2.match(/\[REDACTED\]/g) || []).length;
+      record('M16-B logging: sensitive fields redacted (zero leakage)',
+        leaks.length === 0 && markers >= 6,
+        'no leaks + markers', { leaks, markers });
+
+      log.error('phase-b-error', new Error('disk full'), {
+        user: { apiKey: 'k-123' },
+        outer: { password: 'p1' },
+      });
+      await manager.flush();
+      const raw3 = readLog();
+      record('M16-B logging: nested/error-path redacted, error metadata minimal',
+        !raw3.includes('k-123') &&
+          !raw3.includes('p1') &&
+          raw3.includes('disk full') &&
+          raw3.includes('"name":"Error"'),
+        'nested redacted; name/message only',
+        { nestedLeak: raw3.includes('k-123') || raw3.includes('p1') });
+    } finally {
+      await manager.shutdown();
+      rmSync(logSandbox, { recursive: true, force: true });
+    }
+  }
+
+  // W-06 — W-07 Twilio log sanitization remains intact (source-level proof).
+  {
+    const providerSrc = readFileSync(join(ROOT, 'app/lib/whatsappProvider.js'), 'utf8');
+    record('M16-B logging: W-07 Twilio sanitization intact (no twilioMoreInfo code usage)',
+      !/twilioMoreInfo\s*=/.test(providerSrc) &&
+        providerSrc.includes('Twilio API Error (status='),
+      'sanitized log line', {
+        twilioMoreInfoAssign: /twilioMoreInfo\s*=/.test(providerSrc),
+        hasSanitizedLine: providerSrc.includes('Twilio API Error (status='),
+      });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Q. M1.6 PHASE C — WhatsApp runtime consumer (W-04)
+// ─────────────────────────────────────────────────────────────────────────────
+// Deterministic, sandboxed: the real queue implementation (waQueue.js) and
+// the real consumer logic run against a fake whatsapp-web.js client in a
+// tmp sandbox. The production server's runtime consumer is session-gated
+// (no paired .wwebjs_auth session → logged no-op), so these tests never
+// launch Chrome and never touch the repository working tree.
+{
+  const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const {
+    createWhatsAppRuntime,
+    hasWhatsAppSession,
+  } = await import('../app/lib/whatsappConsumer.mjs');
+  const waQueue = await import('../app/lib/waQueue.js');
+
+  const sandbox = mkdtempSync(join(tmpdir(), 'aarogyam-wa-'));
+  // Fake "paired session" so the webjs session gate passes.
+  const sessionDir = join(sandbox, '.wwebjs_auth', 'session-aarogyam');
+  mkdirSync(sessionDir, { recursive: true });
+  writeFileSync(join(sessionDir, 'creds.json'), '{}');
+
+  let factoryCalls = 0;
+  let destroyed = 0;
+  const sent = [];
+  const makeFakeClient = () => {
+    factoryCalls += 1;
+    const handlers = new Map();
+    return {
+      on: (name, cb) => handlers.set(name, cb),
+      emit: (name, ...args) => {
+        const cb = handlers.get(name);
+        if (cb) cb(...args);
+      },
+      initialize: async () => 'initialized',
+      isRegisteredUser: async () => true,
+      sendMessage: async (chatId, message) => {
+        sent.push({ chatId, message });
+        return { ack: 1 };
+      },
+      destroy: async () => {
+        destroyed += 1;
+      },
+    };
+  };
+
+  try {
+    // ── A. RUNTIME INITIALIZATION — webjs starts, idempotent, single consumer ──
+    let client = null;
+    const runtime = createWhatsAppRuntime({
+      provider: 'webjs',
+      baseDir: sandbox,
+      pollIntervalMs: 40,
+      clientFactory: () => {
+        client = makeFakeClient();
+        return client;
+      },
+    });
+    const started = await runtime.start();
+    record('M16-C runtime: starts under webjs config (session present)',
+      started.phase === 'starting' && started.provider === 'webjs' && runtime.factoryCalls === 1,
+      { phase: 'starting', clients: 1 },
+      { phase: started.phase, clients: runtime.factoryCalls });
+    client.emit('ready');
+    await new Promise((r) => setTimeout(r, 30));
+    record('M16-C runtime: transitions to ready and starts the consumer',
+      runtime.getState().phase === 'ready', 'ready', runtime.getState().phase);
+    const again = await runtime.start();
+    record('M16-C runtime: repeated start is idempotent (no second client/consumer)',
+      again.phase === 'ready' && runtime.factoryCalls === 1,
+      { phase: 'ready', clients: 1 },
+      { phase: again.phase, clients: runtime.factoryCalls });
+
+    // ── B. QUEUE CONSUMPTION — real queue impl, deterministic delivery ──
+    const phone = '9876543210';
+    waQueue.writeQueue(sandbox, [
+      { id: 'test-1', phone, message: 'hello', createdAt: new Date().toISOString(), sent: false },
+    ]);
+    await new Promise((r) => setTimeout(r, 160)); // several 40ms polls
+    const delivered = sent.find((x) => x.chatId === '919876543210@c.us');
+    record('M16-C queue: consumer delivers pending message (91<phone>@c.us)',
+      delivered !== undefined && delivered.message === 'hello',
+      'delivered', sent);
+    const persisted = waQueue.readQueue(sandbox).find((m) => m.id === 'test-1');
+    record('M16-C queue: processed message marked per queue contract (sent, processing cleared)',
+      persisted !== undefined && persisted.sent === true && persisted.processing === false,
+      { sent: true, processing: false },
+      persisted
+        ? { sent: persisted.sent, processing: persisted.processing, failed: persisted.failed }
+        : null);
+
+    // ── C. FAILURE HANDLING — init failure contained, no secret exposure ──
+    const failClient = {
+      on: () => {},
+      emit: () => {},
+      initialize: async () => {
+        throw new Error('PLANTED_PROVIDER_SECRET_XYZ');
+      },
+      destroy: async () => {},
+    };
+    const failRuntime = createWhatsAppRuntime({
+      provider: 'webjs',
+      baseDir: sandbox,
+      clientFactory: () => failClient,
+    });
+    await failRuntime.start();
+    await new Promise((r) => setTimeout(r, 40));
+    const failState = failRuntime.getState();
+    record('M16-C failure: init failure contained (no secret in state, no throw)',
+      failState.phase === 'failed' &&
+        !JSON.stringify(failState).includes('PLANTED_PROVIDER_SECRET_XYZ'),
+      { phase: 'failed', noSecret: true },
+      {
+        phase: failState.phase,
+        leaked: JSON.stringify(failState).includes('PLANTED_PROVIDER_SECRET_XYZ'),
+      });
+
+    // ── D. PROVIDER SEPARATION — twilio never starts the webjs consumer ──
+    let twilioCalls = 0;
+    const twilioRuntime = createWhatsAppRuntime({
+      provider: 'twilio',
+      baseDir: sandbox,
+      clientFactory: () => {
+        twilioCalls += 1;
+        return makeFakeClient();
+      },
+    });
+    const twilioState = await twilioRuntime.start();
+    record('M16-C provider separation: WA_PROVIDER=twilio does not start webjs consumer',
+      twilioState.phase === 'stopped' &&
+        twilioState.reason === 'provider-not-webjs' &&
+        twilioCalls === 0,
+      { phase: 'stopped', reason: 'provider-not-webjs', clients: 0 },
+      { phase: twilioState.phase, reason: twilioState.reason, clients: twilioCalls });
+
+    // ── E. SESSION GATE + SHUTDOWN — no session → no launch; stop safe ──
+    const emptySandbox = mkdtempSync(join(tmpdir(), 'aarogyam-wa-nosess-'));
+    try {
+      const noSession = createWhatsAppRuntime({
+        provider: 'webjs',
+        baseDir: emptySandbox,
+        clientFactory: () => {
+          throw new Error('must not be called');
+        },
+      });
+      const noSessionState = await noSession.start();
+      record('M16-C session gate: no paired session → consumer does not launch',
+        noSessionState.phase === 'stopped' && noSessionState.reason === 'no-session',
+        { phase: 'stopped', reason: 'no-session' },
+        { phase: noSessionState.phase, reason: noSessionState.reason });
+    } finally {
+      rmSync(emptySandbox, { recursive: true, force: true });
+    }
+    record('M16-C session gate: hasWhatsAppSession detects the paired session dir',
+      (await hasWhatsAppSession(sandbox)) === true, true, await hasWhatsAppSession(sandbox));
+
+    await runtime.stop();
+    const sentBefore = sent.length;
+    waQueue.writeQueue(sandbox, [
+      {
+        id: 'test-2',
+        phone: '9876500000',
+        message: 'after-stop',
+        createdAt: new Date().toISOString(),
+        sent: false,
+      },
+    ]);
+    await new Promise((r) => setTimeout(r, 120));
+    record('M16-C shutdown: stop clears the poll timer (no delivery after stop)',
+      sent.length === sentBefore, 'no new sends', { before: sentBefore, after: sent.length });
+    record('M16-C shutdown: stop destroys the client', destroyed === 1, 1, destroyed);
+    const stoppedState = await runtime.stop();
+    record('M16-C shutdown: repeated stop is safe/idempotent',
+      stoppedState.phase === 'stopped', 'stopped', stoppedState.phase);
+    record('M16-C shutdown: no dangling queue lock remains',
+      !existsSync(join(sandbox, 'wa-queue.lock')),
+      'absent', existsSync(join(sandbox, 'wa-queue.lock')));
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TEARDOWN — remove every fixture through the API, restore baseline
 // ─────────────────────────────────────────────────────────────────────────────
 {
@@ -884,6 +1427,22 @@ record('SETUP Patient B books with Doctor 1 -> 201', slotB.status === 201 && !!a
       { users: u, profiles: pp, appointments: a, records: m, prescriptions: r, drugs });
   } finally {
     await p.$disconnect();
+  }
+
+  // M1.6 Phase B (W-01) — the server's instrumentation bootstrap creates
+  // the runtime data/ tree (installation metadata, logs, backups dirs) at
+  // server start. Remove it so the repository working tree is restored to
+  // the clean baseline.
+  {
+    const { rmSync } = await import('node:fs');
+    const dataDir = join(ROOT, 'data');
+    try {
+      if (existsSync(dataDir)) rmSync(dataDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+    record('M16-B teardown: bootstrap runtime data/ tree removed',
+      !existsSync(dataDir), 'absent', existsSync(dataDir));
   }
 }
 
